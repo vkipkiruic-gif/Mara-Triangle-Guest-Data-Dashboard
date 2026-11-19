@@ -2,19 +2,55 @@ import io
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import numpy as np
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import streamlit as st
 
 # ==============================================================================
-# TAHMO / ZENTRA WEATHER FILE PARSER
+# 1. PARSE EARTHRANGER MANUAL RAINFALL STATIONS (PURUNGAT, ISEIYA, KILO 2, OLOOLOLO)
 # ==============================================================================
-def parse_tahmo_file(uploaded_file, timezone_offset_hours: int = 0):
+def parse_earthranger_rainfall(uploaded_file):
+    """
+    Parses an EarthRanger Rainfall CSV/Excel export containing station-level rainfall gauges.
+    Returns normalized daily station records: ['Date', 'Station', 'Rain_mm'].
+    """
+    fname = uploaded_file.name
+    if fname.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(uploaded_file)
+    else:
+        df = pd.read_csv(uploaded_file)
+
+    df.columns = [str(c).strip() for c in df.columns]
+
+    ts_col = next((c for c in df.columns if "reported_at" in c.lower() or "date" in c.lower() or "time" in c.lower()), None)
+    st_col = next((c for c in df.columns if c.lower() == "station" or "station" in c.lower()), None)
+    rain_col = next((c for c in df.columns if "rainfall" in c.lower() or "amount" in c.lower() or "rain" in c.lower()), None)
+
+    if not ts_col or not st_col or not rain_col:
+        raise ValueError("EarthRanger file must contain 'Reported_At', 'Station', and 'Amount_Of_Rainfall_(mm)' columns.")
+
+    df["dt"] = pd.to_datetime(df[ts_col], errors="coerce")
+    df = df.dropna(subset=["dt"]).copy()
+    df["Date"] = df["dt"].dt.date
+    df["Station"] = df[st_col].fillna("Unknown").astype(str).str.strip()
+    df["Rain_mm"] = pd.to_numeric(df[rain_col], errors="coerce").fillna(0.0)
+
+    er_daily = df.groupby(["Date", "Station"], as_index=False)["Rain_mm"].sum()
+    return er_daily
+
+
+# ==============================================================================
+# 2. PARSE TAHMO / ZENTRA WEATHER STATION (SERENA AIRSTRIP)
+# ==============================================================================
+def parse_tahmo_weather(uploaded_file, station_label: str = "Serena Airstrip (TAHMO)", timezone_offset_hours: int = 0):
     """
     Parses a TAHMO / ZENTRA Cloud CSV or Excel export (e.g., 06-01522 Serena Airstrip / TA00569).
-    Automatically skips the 2 metadata header rows and extracts daily rainfall, temperature,
-    humidity/VPD, wind speed, and solar radiation summaries.
+    Returns:
+      - tahmo_station_records: ['Date', 'Station', 'Rain_mm'] for merging with EarthRanger stations
+      - tahmo_full_daily: full meteorological daily table (rainfall, temp, wind, solar)
+      - logger_id: extracted logger ID string
     """
     fname = uploaded_file.name
     if fname.lower().endswith((".xlsx", ".xls")):
@@ -27,7 +63,6 @@ def parse_tahmo_file(uploaded_file, timezone_offset_hours: int = 0):
         df = pd.read_csv(uploaded_file, skiprows=2)
 
     logger_id = str(meta_df.iloc[0, 0]).replace("\ufeff", "").strip() if pd.notna(meta_df.iloc[0, 0]) else "TA00569"
-
     df.columns = [str(c).strip() for c in df.columns]
 
     ts_col = next((c for c in df.columns if "timestamp" in c.lower()), df.columns[0])
@@ -43,7 +78,6 @@ def parse_tahmo_file(uploaded_file, timezone_offset_hours: int = 0):
         df["dt"] = df["dt"] + pd.Timedelta(hours=timezone_offset_hours)
 
     df["Date"] = df["dt"].dt.date
-
     df["Precip_mm"] = pd.to_numeric(df[precip_col], errors="coerce").fillna(0.0) if precip_col else 0.0
     df["Temp_C"] = pd.to_numeric(df[temp_col], errors="coerce") if temp_col else float("nan")
     df["Wind_ms"] = pd.to_numeric(df[wind_col], errors="coerce") if wind_col else float("nan")
@@ -69,17 +103,70 @@ def parse_tahmo_file(uploaded_file, timezone_offset_hours: int = 0):
         daily[col] = daily[col].round(2)
     daily["Avg Solar Radiation (W/m²)"] = daily["Avg Solar Radiation (W/m²)"].round(1)
 
-    return {
-        "logger_id": logger_id,
-        "daily": daily
-    }
+    tahmo_station_records = pd.DataFrame({
+        "Date": daily["Date"],
+        "Station": station_label.strip(),
+        "Rain_mm": daily["Daily Rainfall (mm)"]
+    })
+
+    return tahmo_station_records, daily, logger_id
 
 
 # ==============================================================================
-# EXCEL WORKBOOK BUILDER (IN-MEMORY)
+# 3. MERGE & SUMMARIZE ALL STATIONS (EARTHRANGER + TAHMO)
 # ==============================================================================
-def build_weather_excel(daily_df: pd.DataFrame, station_label: str, period_label: str):
-    wb = openpyxl.Workbook()
+def build_combined_station_summaries(records_df: pd.DataFrame, fill_missing_calendar_days: bool = True):
+    """
+    Combines EarthRanger stations and TAHMO station into:
+      - station_summary: Station totals, rainy days, avg per rainy day, highest single day, share (%)
+      - daily_matrix_df: Date x Station daily rainfall table + Daily Station Mean + Combined Total
+      - station_cols: list of station column names
+    """
+    wet_events = records_df[records_df["Rain_mm"] > 0].copy()
+
+    all_stations = sorted(records_df["Station"].unique().tolist())
+    summary_rows = []
+    for st_name in all_stations:
+        st_wet = wet_events[wet_events["Station"] == st_name]
+        tot_rain = float(st_wet["Rain_mm"].sum())
+        rainy_days = int(len(st_wet))
+        avg_rainy = float(st_wet["Rain_mm"].mean()) if rainy_days > 0 else 0.0
+        max_day = float(st_wet["Rain_mm"].max()) if rainy_days > 0 else 0.0
+        peak_date = str(st_wet.loc[st_wet["Rain_mm"].idxmax(), "Date"]) if rainy_days > 0 else "—"
+        summary_rows.append({
+            "Station": st_name,
+            "Total Rainfall (mm)": round(tot_rain, 2),
+            "Rainy Days (>0 mm)": rainy_days,
+            "Avg per Rainy Day (mm)": round(avg_rainy, 2),
+            "Highest Single Day (mm)": round(max_day, 2),
+            "Peak Rainfall Date": peak_date
+        })
+
+    station_summary = pd.DataFrame(summary_rows).sort_values(by="Total Rainfall (mm)", ascending=False).reset_index(drop=True)
+    total_all = station_summary["Total Rainfall (mm)"].sum()
+    station_summary["Share (%)"] = (station_summary["Total Rainfall (mm)"] / total_all * 100).round(2) if total_all > 0 else 0.0
+
+    pivot_df = records_df.pivot_table(index="Date", columns="Station", values="Rain_mm", aggfunc="sum", fill_value=0.0)
+    ordered_cols = [s for s in station_summary["Station"].tolist() if s in pivot_df.columns]
+    pivot_df = pivot_df[ordered_cols]
+
+    if fill_missing_calendar_days and not pivot_df.empty:
+        full_dates = pd.date_range(pivot_df.index.min(), pivot_df.index.max(), freq="D").date
+        pivot_df = pivot_df.reindex(full_dates, fill_value=0.0)
+        pivot_df.index.name = "Date"
+
+    pivot_df = pivot_df.round(2)
+    pivot_df["Daily Station Mean (mm)"] = pivot_df[ordered_cols].mean(axis=1).round(2)
+    pivot_df["Combined Stations Total (mm)"] = pivot_df[ordered_cols].sum(axis=1).round(2)
+    daily_matrix_df = pivot_df.reset_index()
+
+    return station_summary, daily_matrix_df, ordered_cols
+
+
+# ==============================================================================
+# 4. EXCEL WORKBOOK GENERATOR
+# ==============================================================================
+def _style_sheet(ws, title, df_export, sum_all_numeric=False):
     title_font = Font(name="Calibri", size=14, bold=True, color="1F4E78")
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     bold_font = Font(name="Calibri", size=11, bold=True)
@@ -93,58 +180,87 @@ def build_weather_excel(daily_df: pd.DataFrame, station_label: str, period_label
     )
     total_border = Border(top=Side(style="thin", color="000000"), bottom=Side(style="double", color="000000"))
 
-    ws = wb.active
-    ws.title = "Daily Weather Summary"
-    ws["A1"] = f"MARA TRIANGLE WEATHER SUMMARY ({station_label.upper()}) — {period_label.upper()}"
+    ws["A1"] = title
     ws["A1"].font = title_font
 
-    export_df = daily_df.copy()
-    export_df["Date"] = export_df["Date"].astype(str)
+    df_copy = df_export.copy()
+    if "Date" in df_copy.columns:
+        df_copy["Date"] = df_copy["Date"].astype(str)
 
-    for c_idx, col_name in enumerate(export_df.columns, 1):
+    for c_idx, col_name in enumerate(df_copy.columns, 1):
         cell = ws.cell(row=3, column=c_idx, value=col_name)
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center" if c_idx > 1 else "left")
+        cell.alignment = Alignment(horizontal="center" if c_idx > 1 else "left", wrap_text=True)
 
-    for r_idx, row in enumerate(export_df.itertuples(index=False), 4):
+    for r_idx, row in enumerate(df_copy.itertuples(index=False), 4):
         for c_idx, val in enumerate(row, 1):
             cell = ws.cell(row=r_idx, column=c_idx, value=val)
             cell.font = regular_font
             cell.border = thin_border
-            if c_idx > 1:
-                col_header = str(export_df.columns[c_idx - 1])
-                cell.number_format = "#,##0" if "Records" in col_header else "0.00"
+            col_header = str(df_copy.columns[c_idx - 1])
+            if isinstance(val, (int, float)) and not pd.isna(val):
+                cell.number_format = "#,##0" if ("Records" in col_header or "Days" in col_header) else "0.00"
                 cell.alignment = Alignment(horizontal="right")
+            else:
+                cell.alignment = Alignment(horizontal="center" if c_idx > 1 else "left")
 
-    if len(export_df) > 0:
-        tot_row = len(export_df) + 4
+    if len(df_copy) > 0:
+        tot_row = len(df_copy) + 4
         ws.cell(row=tot_row, column=1, value="TOTAL / AVERAGE").font = bold_font
         ws.cell(row=tot_row, column=1).fill = total_fill
         ws.cell(row=tot_row, column=1).border = total_border
 
-        for c_idx in range(2, len(export_df.columns) + 1):
+        for c_idx in range(2, len(df_copy.columns) + 1):
             col_let = get_column_letter(c_idx)
-            col_header = str(export_df.columns[c_idx - 1])
-            if col_header in ("Daily Rainfall (mm)", "Records Count"):
-                formula = f"=SUM({col_let}4:{col_let}{tot_row - 1})"
-            elif col_header == "Cumulative Rainfall (mm)" or "Max" in col_header or "Peak" in col_header:
-                formula = f"=MAX({col_let}4:{col_let}{tot_row - 1})"
+            col_header = str(df_copy.columns[c_idx - 1])
+            if col_header == "Peak Rainfall Date":
+                cell = ws.cell(row=tot_row, column=c_idx, value="—")
+                cell.alignment = Alignment(horizontal="center")
+            elif sum_all_numeric or col_header in ("Total Rainfall (mm)", "Share (%)", "Daily Rainfall (mm)", "Records Count"):
+                cell = ws.cell(row=tot_row, column=c_idx, value=f"=SUM({col_let}4:{col_let}{tot_row - 1})")
+                cell.number_format = "#,##0" if ("Records" in col_header or "Days" in col_header) else "0.00"
+                cell.alignment = Alignment(horizontal="right")
+            elif col_header == "Cumulative Rainfall (mm)" or "Highest" in col_header or "Max" in col_header or "Peak" in col_header:
+                cell = ws.cell(row=tot_row, column=c_idx, value=f"=MAX({col_let}4:{col_let}{tot_row - 1})")
+                cell.number_format = "0.00"
+                cell.alignment = Alignment(horizontal="right")
             elif "Min" in col_header:
-                formula = f"=MIN({col_let}4:{col_let}{tot_row - 1})"
+                cell = ws.cell(row=tot_row, column=c_idx, value=f"=MIN({col_let}4:{col_let}{tot_row - 1})")
+                cell.number_format = "0.00"
+                cell.alignment = Alignment(horizontal="right")
             else:
-                formula = f"=AVERAGE({col_let}4:{col_let}{tot_row - 1})"
+                cell = ws.cell(row=tot_row, column=c_idx, value=f"=AVERAGE({col_let}4:{col_let}{tot_row - 1})")
+                cell.number_format = "0.0" if "Days" in col_header else "0.00"
+                cell.alignment = Alignment(horizontal="right")
 
-            cell = ws.cell(row=tot_row, column=c_idx, value=formula)
             cell.font = bold_font
             cell.fill = total_fill
             cell.border = total_border
-            cell.number_format = "#,##0" if "Records" in col_header else "0.00"
-            cell.alignment = Alignment(horizontal="right")
 
     for col in ws.columns:
         max_len = max(len(str(cell.value or "")) for cell in col)
         ws.column_dimensions[get_column_letter(col[0].column)].width = max(max_len + 4, 14)
+
+
+def build_combined_weather_excel(
+    station_summary: pd.DataFrame,
+    daily_matrix_df: pd.DataFrame,
+    tahmo_daily_df: pd.DataFrame | None,
+    period_label: str,
+    tahmo_station_name: str
+):
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "All Stations Summary"
+    _style_sheet(ws1, f"MARA TRIANGLE RAINFALL BY STATION — {period_label.upper()}", station_summary, sum_all_numeric=False)
+
+    ws2 = wb.create_sheet("Daily Rainfall by Station")
+    _style_sheet(ws2, f"MARA TRIANGLE DAILY RAINFALL BY STATION (MM) — {period_label.upper()}", daily_matrix_df, sum_all_numeric=True)
+
+    if tahmo_daily_df is not None and not tahmo_daily_df.empty:
+        ws3 = wb.create_sheet("Serena TAHMO Met Data")
+        _style_sheet(ws3, f"TAHMO WEATHER STATION ({tahmo_station_name.upper()}) — {period_label.upper()}", tahmo_daily_df, sum_all_numeric=False)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -153,90 +269,174 @@ def build_weather_excel(daily_df: pd.DataFrame, station_label: str, period_label
 
 
 # ==============================================================================
-# STREAMLIT PAGE UI
+# STREAMLIT PAGE UI (DUAL UPLOADER: EARTHRANGER + TAHMO UNIFIED)
 # ==============================================================================
-st.title("🌧️ Weather Summary — Serena Airstrip (TAHMO)")
+st.title("🌧️ Weather & Rainfall Station Summary")
 st.markdown(
-    "Upload the monthly **TAHMO / ZENTRA Weather Station** export (`06-01522` / `TA00569 - Serena Airstrip`) "
-    "to calculate daily rainfall amounts, total monthly rainfall, temperature trends, and export a formatted Excel report."
+    "Upload **both** your **EarthRanger Station Rainfall file** (`Purungat`, `Iseiya`, `Kilo 2`, `Oloololo`, etc.) "
+    "and your **TAHMO Weather Station file** (`Serena Airstrip`) to analyze all stations together in one unified report."
 )
 
-with st.sidebar:
-    st.subheader("Upload TAHMO Weather Data")
-    uploaded_weather = st.file_uploader(
-        "Choose TAHMO CSV or Excel file",
+col_up1, col_up2 = st.columns(2)
+with col_up1:
+    uploaded_er = st.file_uploader(
+        "1️⃣ Upload EarthRanger Rainfall CSV / Excel (`weather rainfall.csv`)",
         type=["csv", "xlsx", "xls"],
-        key="tahmo_file"
+        key="er_rainfall_uploader"
     )
-    station_name = st.text_input("Weather Station Label", value="TA00569 - Serena Airstrip", key="weather_station")
-    report_month = st.text_input("Report Month / Label", value="October 2026", key="weather_month")
+with col_up2:
+    uploaded_tahmo = st.file_uploader(
+        "2️⃣ Upload TAHMO Weather CSV / Excel (`06-01522` Serena Airstrip)",
+        type=["csv", "xlsx", "xls"],
+        key="tahmo_rainfall_uploader"
+    )
+
+with st.sidebar:
+    st.subheader("Weather Report Settings")
+    report_period = st.text_input("Report Period Label", value="November 2026", key="unified_weather_period")
+    tahmo_label = st.text_input("TAHMO Station Display Name", value="Serena Airstrip (TAHMO)", key="tahmo_station_label")
     tz_shift = st.selectbox(
-        "Timestamp Timezone Adjustment",
+        "TAHMO Timestamp Adjustment",
         options=[0, 3],
-        format_func=lambda x: "As Exported in File (+0h)" if x == 0 else "Convert UTC to EAT (+3h)",
+        format_func=lambda x: "As Exported (+0h)" if x == 0 else "Convert UTC to EAT (+3h)",
         index=0,
-        key="weather_tz"
+        key="unified_tz_shift"
     )
-    filter_month_only = st.checkbox("Exclude partial boundary days outside main month", value=False, key="weather_filter")
+    fill_dry_days = st.checkbox("Include 0 mm dry days in daily breakdown", value=True, key="unified_fill_dry")
 
-if uploaded_weather is not None:
-    parsed = parse_tahmo_file(uploaded_weather, timezone_offset_hours=tz_shift)
-    daily_df = parsed["daily"].copy()
+if uploaded_er is not None or uploaded_tahmo is not None:
+    try:
+        records_list = []
+        tahmo_full_daily = None
+        tahmo_logger = None
 
-    if filter_month_only and not daily_df.empty:
-        dominant_ym = pd.Series([d.strftime("%Y-%m") for d in daily_df["Date"]]).mode()[0]
-        daily_df = daily_df[[d.strftime("%Y-%m") == dominant_ym for d in daily_df["Date"]]].reset_index(drop=True)
-        daily_df["Cumulative Rainfall (mm)"] = daily_df["Daily Rainfall (mm)"].cumsum().round(2)
+        if uploaded_er is not None:
+            er_df = parse_earthranger_rainfall(uploaded_er)
+            records_list.append(er_df)
 
-    total_rain = float(daily_df["Daily Rainfall (mm)"].sum())
-    rainy_days = int((daily_df["Daily Rainfall (mm)"] > 0).sum())
-    wettest_row = daily_df.loc[daily_df["Daily Rainfall (mm)"].idxmax()]
-    avg_temp = float(daily_df["Avg Temperature (°C)"].mean())
+        if uploaded_tahmo is not None:
+            tahmo_st_df, tahmo_full_daily, tahmo_logger = parse_tahmo_weather(
+                uploaded_tahmo, station_label=tahmo_label, timezone_offset_hours=tz_shift
+            )
+            records_list.append(tahmo_st_df)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Monthly Rainfall", f"{total_rain:.2f} mm")
-    c2.metric("Rainy Days (>0 mm)", f"{rainy_days} days")
-    c3.metric("Wettest Single Day", f"{wettest_row['Daily Rainfall (mm)']:.2f} mm", delta=f"Date: {wettest_row['Date']}", delta_color="off")
-    c4.metric("Average Daily Temp", f"{avg_temp:.1f} °C")
+        combined_records = pd.concat(records_list, ignore_index=True)
+        station_summary, daily_matrix_df, ordered_stations = build_combined_station_summaries(
+            combined_records, fill_missing_calendar_days=fill_dry_days
+        )
 
-    st.info(
-        f"**Auto-Generated Weather Narrative ({report_month}):** The total amount of rainfall recorded at **Serena Airstrip** "
-        f"({station_name}, Logger `{parsed['logger_id']}`) was **{total_rain:.2f} mm** across **{rainy_days} rainy days**. "
-        f"The highest single-day rainfall was **{wettest_row['Daily Rainfall (mm)']:.2f} mm** recorded on **{wettest_row['Date']}**, "
-        f"and the average daily air temperature was **{avg_temp:.1f} °C**."
-    )
+        wettest_st = station_summary.iloc[0]
+        driest_st = station_summary.iloc[-1]
+        conservancy_avg = float(station_summary["Total Rainfall (mm)"].mean())
+        wet_events = combined_records[combined_records["Rain_mm"] > 0]
+        if not wet_events.empty:
+            peak_row = wet_events.loc[wet_events["Rain_mm"].idxmax()]
+            peak_text = f"{peak_row['Rain_mm']:.2f} mm ({peak_row['Station']} on {peak_row['Date']})"
+        else:
+            peak_text = "0.00 mm"
 
-    excel_bytes = build_weather_excel(daily_df, station_name, report_month)
-    st.download_button(
-        label="📥 Download Serena Airstrip Weather Report (.xlsx)",
-        data=excel_bytes,
-        file_name=f"Serena_Airstrip_Weather_{report_month.replace(' ', '_')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Active Weather Stations", f"{len(ordered_stations)} stations")
+        k2.metric("Wettest Station", f"{wettest_st['Station']}", delta=f"{wettest_st['Total Rainfall (mm)']:.2f} mm", delta_color="off")
+        k3.metric("All-Stations Mean Rainfall", f"{conservancy_avg:.2f} mm", delta=f"Lowest: {driest_st['Station']} ({driest_st['Total Rainfall (mm)']:.2f} mm)", delta_color="off")
+        k4.metric("Highest Single-Day Downpour", peak_text.split(" (")[0], delta=peak_text.split(" (")[1].rstrip(")") if "(" in peak_text else "", delta_color="off")
 
-    st.divider()
+        station_list_text = ", ".join(
+            f"**{r['Station']}** ({r['Total Rainfall (mm)']:.2f} mm)" for _, r in station_summary.iterrows()
+        )
+        st.info(
+            f"**Auto-Generated Weather & Rainfall Narrative ({report_period}):** Across the **{len(ordered_stations)} monitoring stations** "
+            f"in the Mara Triangle, **{wettest_st['Station']}** recorded the highest cumulative rainfall at **{wettest_st['Total Rainfall (mm)']:.2f} mm**, "
+            f"followed by {', '.join(station_list_text.split(', ')[1:]) if len(station_summary) > 1 else station_list_text}. "
+            f"The conservancy-wide station average was **{conservancy_avg:.2f} mm**, with the highest single-day rainfall of **{peak_text}**."
+        )
 
-    st.subheader(f"1. Daily Rainfall Amount — Serena Airstrip ({report_month})")
-    fig1, ax1 = plt.subplots(figsize=(11, 4.3))
-    dates_dt = pd.to_datetime(daily_df["Date"])
-    bars = ax1.bar(dates_dt, daily_df["Daily Rainfall (mm)"], color="#4a6fe3", alpha=0.85, label="Daily Precipitation (mm)")
-    ax1.plot(dates_dt, daily_df["Daily Rainfall (mm)"], color="#1f4e78", marker="o", markersize=4, linewidth=1.3)
+        excel_bytes = build_combined_weather_excel(
+            station_summary, daily_matrix_df, tahmo_full_daily, report_period, tahmo_label
+        )
+        st.download_button(
+            label="📥 Download Unified Weather & Rainfall Report (.xlsx)",
+            data=excel_bytes,
+            file_name=f"Mara_Triangle_Weather_Report_{report_period.replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
-    ax1.set_ylabel("Precipitation (mm)")
-    ax1.set_xlabel("Date")
-    ax1.set_title(f"Total Daily Precipitation — {station_name} ({report_month})", fontweight="bold")
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    ax1.xaxis.set_major_locator(mdates.DayLocator(interval=2))
-    plt.xticks(rotation=30, ha="right")
-    ax1.grid(True, linestyle="--", alpha=0.5)
+        st.divider()
 
-    for bar in bars:
-        h = bar.get_height()
-        if h >= 0.5:
-            ax1.text(bar.get_x() + bar.get_width() / 2, h + 0.35, f"{h:.2f}", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#1f4e78")
+        st.subheader(f"1. Total Rainfall Comparison Across All Stations ({report_period})")
+        c_left, c_right = st.columns([1.2, 1.2])
+        with c_left:
+            st.dataframe(station_summary, use_container_width=True, hide_index=True)
+        with c_right:
+            fig1, ax1 = plt.subplots(figsize=(7.8, 4.4))
+            palette = ["#1F4E78", "#2E8B57", "#00AEEF", "#D95F02", "#7570B3", "#E7298A"]
+            colors = [palette[i % len(palette)] for i in range(len(station_summary))]
+            bars = ax1.bar(station_summary["Station"], station_summary["Total Rainfall (mm)"], color=colors, width=0.55)
+            ax1.set_ylabel("Total Rainfall (mm)")
+            ax1.set_title(f"Total Rainfall by Station — {report_period}", fontweight="bold")
+            plt.xticks(rotation=18, ha="right", fontsize=9)
+            ax1.grid(axis="y", linestyle="--", alpha=0.5)
+            max_val = station_summary["Total Rainfall (mm)"].max() if len(station_summary) > 0 else 1
+            for bar in bars:
+                h = bar.get_height()
+                ax1.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    h + (max_val * 0.02),
+                    f"{h:.1f} mm",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8.5,
+                    fontweight="bold"
+                )
+            st.pyplot(fig1)
 
-    st.pyplot(fig1)
+        st.subheader(f"2. Daily Rainfall Distribution Across All Stations ({report_period})")
+        fig2, ax2 = plt.subplots(figsize=(11.5, 4.6))
+        dates_str = [str(d) for d in daily_matrix_df["Date"]]
+        x = np.arange(len(dates_str))
+        n_st = len(ordered_stations)
+        width = min(0.82 / max(n_st, 1), 0.20)
+        palette = ["#1F4E78", "#2E8B57", "#00AEEF", "#D95F02", "#7570B3", "#E7298A"]
 
-    st.subheader(f"2. Average Daily Temperature (°C) — Serena Airstrip ({report_month})")
-    fig2, ax2 = plt.subplots(figsize=(11, 4))
-    ax2
+        for idx, st_name in enumerate(ordered_stations):
+            offset = (idx - (n_st - 1) / 2) * width
+            ax2.bar(x + offset, daily_matrix_df[st_name], width=width, label=st_name, color=palette[idx % len(palette)])
+
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(dates_str, rotation=45, ha="right", fontsize=8.5)
+        ax2.set_ylabel("Rainfall (mm)")
+        ax2.set_title(f"Daily Rainfall Amount per Station (mm) — {report_period}", fontweight="bold")
+        ax2.legend(title="Station", ncol=min(n_st, 5))
+        ax2.grid(axis="y", linestyle="--", alpha=0.5)
+        st.pyplot(fig2)
+
+        st.subheader(f"3. Daily Rainfall Breakdown Table by Station ({report_period})")
+        st.dataframe(daily_matrix_df, use_container_width=True, hide_index=True)
+
+        if tahmo_full_daily is not None and not tahmo_full_daily.empty:
+            st.divider()
+            st.subheader(f"4. {tahmo_label} — Temperature & Meteorological Summary ({report_period})")
+            t_col1, t_col2 = st.columns([1.2, 1])
+            with t_col1:
+                fig3, ax3 = plt.subplots(figsize=(8, 3.8))
+                t_dates = pd.to_datetime(tahmo_full_daily["Date"])
+                ax3.plot(t_dates, tahmo_full_daily["Avg Temperature (°C)"], color="#D95F02", marker="o", markersize=4, linewidth=1.8, label="Avg Temp (°C)")
+                ax3.fill_between(t_dates, tahmo_full_daily["Min Temperature (°C)"], tahmo_full_daily["Max Temperature (°C)"], color="#D95F02", alpha=0.15, label="Min–Max Daily Range")
+                ax3.set_ylabel("Temperature (°C)")
+                ax3.set_title(f"Daily Air Temperature (°C) — {tahmo_label}", fontweight="bold")
+                ax3.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
+                plt.xticks(rotation=30, ha="right", fontsize=8.5)
+                ax3.legend()
+                ax3.grid(True, linestyle="--", alpha=0.5)
+                st.pyplot(fig3)
+            with t_col2:
+                met_cols = [
+                    "Date", "Daily Rainfall (mm)", "Avg Temperature (°C)",
+                    "Min Temperature (°C)", "Max Temperature (°C)", "Avg Wind Speed (m/s)"
+                ]
+                st.dataframe(tahmo_full_daily[met_cols], use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Error processing Weather & Rainfall files: {e}")
+else:
+    st.info("👆 Upload your **EarthRanger Rainfall file** (`weather rainfall.csv`) and/or your **TAHMO Weather Station file** (`06-01522`) above to generate the combined multi-station report.")
