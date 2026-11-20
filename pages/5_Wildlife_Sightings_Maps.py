@@ -395,8 +395,8 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
     ax.text(x0 + bar_deg, y0 + h * 1.45, f"{scale_km:g} km", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
 
 
-def add_top_right_logo(fig, ax, logo_bytes):
-    """Places the uploaded company logo in the top-right corner of the map frame after tight_layout()."""
+def add_top_right_logo(ax, logo_bytes, min_lon, max_lon, min_lat, max_lat, cos_lat):
+    """Places the uploaded company logo directly onto the top-right of `ax` in data coordinates (zorder=99)."""
     if not logo_bytes:
         return
     pil_logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
@@ -404,26 +404,32 @@ def add_top_right_logo(fig, ax, logo_bytes):
     pil_logo = Image.alpha_composite(bg, pil_logo).convert("RGB")
     logo_arr = np.asarray(pil_logo)
 
-    fig.canvas.draw()
-    pos = ax.get_position()
-    fig_w, fig_h = fig.get_size_inches()
-
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
     aspect = pil_logo.width / max(float(pil_logo.height), 1.0)
-    logo_h_fig = pos.height * 0.145
-    logo_w_fig = min(max(logo_h_fig * aspect * (fig_h / fig_w), pos.width * 0.09), pos.width * 0.28)
-    pad_x = pos.width * 0.015
-    pad_y = pos.height * 0.015
 
-    ax_logo = fig.add_axes(
-        [pos.x1 - pad_x - logo_w_fig, pos.y1 - pad_y - logo_h_fig, logo_w_fig, logo_h_fig],
-        zorder=50
+    logo_h_deg = lat_span * 0.145
+    logo_w_deg = min(max((logo_h_deg * aspect) / max(cos_lat, 0.1), lon_span * 0.09), lon_span * 0.28)
+
+    pad_x = lon_span * 0.018
+    pad_y = lat_span * 0.018
+
+    x1 = max_lon - pad_x
+    x0 = x1 - logo_w_deg
+    y1 = max_lat - pad_y
+    y0 = y1 - logo_h_deg
+
+    frame = mpatches.Rectangle(
+        (x0, y0),
+        logo_w_deg,
+        logo_h_deg,
+        facecolor="white",
+        edgecolor="#1F4E78",
+        linewidth=1.1,
+        zorder=98
     )
-    ax_logo.imshow(logo_arr)
-    ax_logo.set_xticks([])
-    ax_logo.set_yticks([])
-    for spine in ax_logo.spines.values():
-        spine.set_edgecolor("#1F4E78")
-        spine.set_linewidth(1.1)
+    ax.add_patch(frame)
+    ax.imshow(logo_arr, extent=(x0, x1, y0, y1), aspect="auto", zorder=99)
 
 
 # ==============================================================================
@@ -696,8 +702,8 @@ def render_species_map(
         zorder=15
     )
 
+    add_top_right_logo(ax, logo_bytes, min_lon, max_lon, min_lat, max_lat, cos_lat)
     plt.tight_layout()
-    add_top_right_logo(fig, ax, logo_bytes)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=240, bbox_inches="tight")
     plt.close(fig)
@@ -843,110 +849,4 @@ if sightings_file is not None:
     if logo_file is not None:
         try:
             raw_logo = logo_file.getvalue()
-            Image.open(io.BytesIO(raw_logo)).verify()
-            logo_bytes = raw_logo
-        except Exception as e:
-            st.warning(f"Could not read uploaded logo image ({logo_file.name}): {e}")
-
-    # --- SUMMARY TABLE: TOTAL SIGHTINGS PER SPECIES ---
-    species_summary = (
-        raw_df.groupby("Species_Clean", as_index=False)
-        .agg(
-            **{
-                "Total Sightings": ("Species_Clean", "count"),
-                "Mapped GPS Sightings": ("Lat", lambda s: int(s.notna().sum())),
-                "Recorded Individuals (Cleaned)": ("Count_Clean", lambda s: int(s.sum())),
-            }
-        )
-        .sort_values(by="Total Sightings", ascending=False)
-        .reset_index(drop=True)
-    )
-    species_summary["Share of Sightings (%)"] = (
-        species_summary["Total Sightings"] / species_summary["Total Sightings"].sum() * 100
-    ).round(2)
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Wildlife Sightings", f"{len(raw_df):,}")
-    m2.metric("Unique Species Recorded", f"{len(species_summary)}")
-    m3.metric("Top Sighted Species", species_summary.iloc[0]["Species_Clean"], delta=f"{species_summary.iloc[0]['Total Sightings']} sightings", delta_color="off")
-    active_layers = len(conservancies_loaded) + int(len(roads_features) > 0) + int(len(rivers_features) > 0) + int(len(ranger_features) > 0)
-    m4.metric("Active GIS Map Layers", f"{active_layers} layers")
-
-    st.subheader(f"1. Total Number of Sightings per Species ({report_period})")
-    st.dataframe(species_summary, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # --- GENERATE PER-SPECIES MAPS ---
-    st.subheader(f"2. Per-Species Wildlife Distribution Maps ({report_period})")
-    all_species_list = species_summary["Species_Clean"].tolist()
-    default_selected = all_species_list[:6]
-
-    selected_species = st.multiselect(
-        "Select Species to Generate Individual Maps For (each species gets its own full map):",
-        options=all_species_list,
-        default=default_selected
-    )
-
-    marker_palette = [
-        "#D92323", "#E67E22", "#8E44AD", "#16A085", "#C0392B",
-        "#2980B9", "#D35400", "#27AE60", "#884EA0", "#B03A2E"
-    ]
-
-    if selected_species:
-        if st.button("🗺️ Generate All Selected Species Maps & ZIP Bundle", type="primary"):
-            zip_buffer = io.BytesIO()
-            generated_maps = {}
-
-            progress = st.progress(0)
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                for idx, sp in enumerate(selected_species):
-                    sp_subset = valid_geo_df[valid_geo_df["Species_Clean"] == sp]
-                    color = marker_palette[idx % len(marker_palette)]
-                    png_bytes = render_species_map(
-                        species_name=sp,
-                        sp_df=sp_subset,
-                        conservancies=conservancies_loaded,
-                        rivers_features=rivers_features,
-                        rivers_label=rivers_legend_name,
-                        roads_features=roads_features,
-                        roads_label=roads_legend_name,
-                        ranger_features=ranger_features,
-                        ranger_posts_label=ranger_legend_name,
-                        label_ranger_posts=show_post_labels,
-                        logo_bytes=logo_bytes,
-                        report_period=report_period,
-                        marker_color=color,
-                        zoom_level=zoom_level,
-                        label_conservancies_on_map=show_poly_labels
-                    )
-                    generated_maps[sp] = png_bytes
-                    safe_sp = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in sp).strip().replace(" ", "_")
-                    zf.writestr(f"{safe_sp}_Sightings_Map_{report_period.replace(' ', '_')}.png", png_bytes)
-                    progress.progress((idx + 1) / len(selected_species))
-
-            zip_buffer.seek(0)
-            st.download_button(
-                label=f"📦 Download All {len(selected_species)} Species Maps (.ZIP)",
-                data=zip_buffer,
-                file_name=f"Mara_Triangle_Species_Maps_{report_period.replace(' ', '_')}.zip",
-                mime="application/zip"
-            )
-
-            for idx, sp in enumerate(selected_species):
-                st.image(
-                    generated_maps[sp],
-                    caption=f"{sp} — Total Sightings: {len(valid_geo_df[valid_geo_df['Species_Clean'] == sp])}",
-                    use_container_width=True
-                )
-                safe_sp = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in sp).strip().replace(" ", "_")
-                st.download_button(
-                    label=f"📥 Download {sp} Map (.png)",
-                    data=generated_maps[sp],
-                    file_name=f"{safe_sp}_Map.png",
-                    mime="image/png",
-                    key=f"dl_map_{idx}_{safe_sp}"
-                )
-                st.divider()
-else:
-    st.info("👆 Upload your **EarthRanger Wildlife Sightings CSV**, **Conservancy Boundary ZIP Shapefiles**, **Roads ZIP**, **Rivers & Luggas ZIPs**, **Ranger Posts ZIP**, and **Company Logo** above to generate maps for each species.")
+            Image.open(io.BytesIO(raw_logo
