@@ -395,25 +395,28 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
     ax.text(x0 + bar_deg, y0 + h * 1.45, f"{scale_km:g} km", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
 
 
-def add_top_right_logo(ax, logo_bytes):
-    """Places the uploaded company logo in the top-right corner of the map using an inset axes."""
+def add_top_right_logo(fig, ax, logo_bytes):
+    """Places the uploaded company logo in the top-right corner of the map frame after tight_layout()."""
     if not logo_bytes:
         return
     pil_logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
-    bg = Image.new("RGBA", pil_logo.size, (255, 255, 255, 240))
+    bg = Image.new("RGBA", pil_logo.size, (255, 255, 255, 245))
     pil_logo = Image.alpha_composite(bg, pil_logo).convert("RGB")
     logo_arr = np.asarray(pil_logo)
 
-    aspect = pil_logo.width / max(float(pil_logo.height), 1.0)
-    box_h = 0.13
-    box_w = min(max(box_h * aspect * 0.73, 0.10), 0.28)
-    pad_right = 0.015
-    pad_top = 0.015
+    fig.canvas.draw()
+    pos = ax.get_position()
+    fig_w, fig_h = fig.get_size_inches()
 
-    ax_logo = ax.inset_axes(
-        [1.0 - pad_right - box_w, 1.0 - pad_top - box_h, box_w, box_h],
-        transform=ax.transAxes,
-        zorder=30
+    aspect = pil_logo.width / max(float(pil_logo.height), 1.0)
+    logo_h_fig = pos.height * 0.145
+    logo_w_fig = min(max(logo_h_fig * aspect * (fig_h / fig_w), pos.width * 0.09), pos.width * 0.28)
+    pad_x = pos.width * 0.015
+    pad_y = pos.height * 0.015
+
+    ax_logo = fig.add_axes(
+        [pos.x1 - pad_x - logo_w_fig, pos.y1 - pad_y - logo_h_fig, logo_w_fig, logo_h_fig],
+        zorder=50
     )
     ax_logo.imshow(logo_arr)
     ax_logo.set_xticks([])
@@ -647,10 +650,9 @@ def render_species_map(
         )
     )
 
-    # 7. Cartographic North Arrow & Bearing Rose + Scale Bar + Logo
+    # 7. Cartographic North Arrow & Bearing Rose + Scale Bar
     draw_compass_and_bearing(ax, x_frac=0.075, y_frac=0.88)
     draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat)
-    add_top_right_logo(ax, logo_bytes)
 
     # 8. Legend (Bottom-Right)
     leg = ax.legend(
@@ -695,6 +697,7 @@ def render_species_map(
     )
 
     plt.tight_layout()
+    add_top_right_logo(fig, ax, logo_bytes)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=240, bbox_inches="tight")
     plt.close(fig)
@@ -719,10 +722,12 @@ with col1:
         key="wildlife_csv_uploader"
     )
     logo_file = st.file_uploader(
-        "2️⃣ Upload Company Logo (PNG / JPG — placed in Top-Right)",
+        "2️⃣ Upload Mara Conservancy / Company Logo (PNG / JPG — placed in Top-Right)",
         type=["png", "jpg", "jpeg"],
         key="company_logo_uploader"
     )
+    if logo_file is not None:
+        st.image(logo_file, caption="Logo loaded (will appear in top-right corner of every map)", width=130)
     conservancy_zips = st.file_uploader(
         "3️⃣ Upload Conservancy / Patrol Area Boundary Shapefiles (`.zip` — one or multiple)",
         type=["zip"],
@@ -736,9 +741,10 @@ with col2:
         type=["zip"],
         key="roads_zip_uploader"
     )
-    rivers_zip = st.file_uploader(
-        "5️⃣ Upload Rivers & Luggas Shapefile (`.zip`)",
+    rivers_zips = st.file_uploader(
+        "5️⃣ Upload Rivers & Luggas Shapefiles (`.zip` — upload Rivers & Luggas together)",
         type=["zip"],
+        accept_multiple_files=True,
         key="rivers_zip_uploader"
     )
     ranger_posts_zip = st.file_uploader(
@@ -819,11 +825,12 @@ if sightings_file is not None:
             st.warning(f"Could not read Roads shapefile: {e}")
 
     rivers_features = []
-    if rivers_zip is not None:
-        try:
-            rivers_features = load_shapefile_zip(rivers_zip, fallback_name=rivers_legend_name)
-        except Exception as e:
-            st.warning(f"Could not read Rivers/Luggas shapefile: {e}")
+    if rivers_zips:
+        for rzip in rivers_zips:
+            try:
+                rivers_features.extend(load_shapefile_zip(rzip, fallback_name=rivers_legend_name))
+            except Exception as e:
+                st.warning(f"Could not read Rivers/Luggas shapefile ({rzip.name}): {e}")
 
     ranger_features = []
     if ranger_posts_zip is not None:
@@ -942,4 +949,4 @@ if sightings_file is not None:
                 )
                 st.divider()
 else:
-    st.info("👆 Upload your **EarthRanger Wildlife Sightings CSV**, **Conservancy Boundary ZIP Shapefiles**, **Roads ZIP**, **Rivers & Luggas ZIP**, **Ranger Posts ZIP**, and **Company Logo** above to generate maps for each species.")
+    st.info("👆 Upload your **EarthRanger Wildlife Sightings CSV**, **Conservancy Boundary ZIP Shapefiles**, **Roads ZIP**, **Rivers & Luggas ZIPs**, **Ranger Posts ZIP**, and **Company Logo** above to generate maps for each species.")
