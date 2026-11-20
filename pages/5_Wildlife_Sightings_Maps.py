@@ -396,29 +396,31 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
 
 
 def add_top_right_logo(ax, logo_bytes):
-    """Places the uploaded company logo in the top-right corner of the map."""
+    """Places the uploaded company logo in the top-right corner of the map using an inset axes."""
     if not logo_bytes:
         return
-    try:
-        pil_logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
-        max_h = 95
-        ratio = max_h / float(pil_logo.height)
-        new_w = max(int(pil_logo.width * ratio), 1)
-        pil_logo = pil_logo.resize((new_w, max_h), Image.Resampling.LANCZOS)
+    pil_logo = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
+    bg = Image.new("RGBA", pil_logo.size, (255, 255, 255, 240))
+    pil_logo = Image.alpha_composite(bg, pil_logo).convert("RGB")
+    logo_arr = np.asarray(pil_logo)
 
-        imagebox = OffsetImage(np.asarray(pil_logo), zoom=0.85)
-        ab = AnnotationBbox(
-            imagebox,
-            (0.985, 0.985),
-            xycoords="axes fraction",
-            box_alignment=(1.0, 1.0),
-            frameon=True,
-            bboxprops=dict(facecolor="white", edgecolor="#CCCCCC", alpha=0.88, pad=0.25),
-            zorder=25
-        )
-        ax.add_artist(ab)
-    except Exception:
-        pass
+    aspect = pil_logo.width / max(float(pil_logo.height), 1.0)
+    box_h = 0.13
+    box_w = min(max(box_h * aspect * 0.73, 0.10), 0.28)
+    pad_right = 0.015
+    pad_top = 0.015
+
+    ax_logo = ax.inset_axes(
+        [1.0 - pad_right - box_w, 1.0 - pad_top - box_h, box_w, box_h],
+        transform=ax.transAxes,
+        zorder=30
+    )
+    ax_logo.imshow(logo_arr)
+    ax_logo.set_xticks([])
+    ax_logo.set_yticks([])
+    for spine in ax_logo.spines.values():
+        spine.set_edgecolor("#1F4E78")
+        spine.set_linewidth(1.1)
 
 
 # ==============================================================================
@@ -830,7 +832,14 @@ if sightings_file is not None:
         except Exception as e:
             st.warning(f"Could not read Ranger Posts shapefile: {e}")
 
-    logo_bytes = logo_file.getvalue() if logo_file is not None else None
+    logo_bytes = None
+    if logo_file is not None:
+        try:
+            raw_logo = logo_file.getvalue()
+            Image.open(io.BytesIO(raw_logo)).verify()
+            logo_bytes = raw_logo
+        except Exception as e:
+            st.warning(f"Could not read uploaded logo image ({logo_file.name}): {e}")
 
     # --- SUMMARY TABLE: TOTAL SIGHTINGS PER SPECIES ---
     species_summary = (
