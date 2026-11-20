@@ -1,30 +1,31 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="Mara Triangle Mapping and Arrivals Report",
+    page_title="Mara Triangle Data & Mapping Dashboard",
     page_icon="🦁",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-with st.sidebar:
-    st.markdown("## 🦁 Mara Triangle")
-    st.markdown("**Mapping & Arrivals Report**")
-    st.divider()
+# Define all dashboard pages (including Wildlife Sightings Maps & Patrol Tracks Maps)
+wildlife_page = st.Page(
+    "pages/5_Wildlife_Sightings_Maps.py",
+    title="Wildlife Sightings Maps",
+    icon="🗺️",
+)
+patrol_tracks_page = st.Page(
+    "pages/6_Patrol_Tracks_Maps.py",
+    title="Patrol Tracks Maps",
+    icon="🛰️",
+)
 
-guest_page = st.Page("pages/1_Guest_Data.py", title="Guest Data", icon="👥", default=True)
-speed_page = st.Page("pages/2_Speed_Tracker_Reports.py", title="Speed Tracker Reports", icon="🚦")
-weather_page = st.Page("pages/3_Weather_Summary.py", title="Weather Summary", icon="🌧️")
-balloon_page = st.Page("pages/4_Balloon_Reports.py", title="Balloon Reports", icon="🎈")
-wildlife_page = st.Page("pages/5_Wildlife_Sightings_Maps.py", title="Wildlife Sightings Maps", icon="🗺️")
-
-pg = st.navigation({
-    "Mara Triangle Mapping & Arrivals Report": [
-        guest_page,
-        speed_page,
-        weather_page,
-        balloon_page,
-        wildlife_page,
-    ]
-})
+pg = st.navigation(
+    {
+        "GIS & Mapping Reports": [
+            wildlife_page,
+            patrol_tracks_page,
+        ]
+    }
+)
 
 pg.run()
