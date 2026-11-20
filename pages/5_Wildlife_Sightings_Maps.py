@@ -15,6 +15,7 @@ import streamlit as st
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 from PIL import Image
 
+
 # ==============================================================================
 # 1. OPENTOPOMAP TILE STITCHER (https://tile.opentopomap.org/{z}/{x}/{y}.png)
 # ==============================================================================
@@ -188,7 +189,7 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
     ax.text(x0 + bar_deg, y0 + h * 1.45, f"{scale_km:g} km", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
 
 
-def add_top_right_logo(ax, logo_bytes: bytes | None):
+def add_top_right_logo(ax, logo_bytes):
     """Places the uploaded company logo in the top-right corner of the map."""
     if not logo_bytes:
         return
@@ -220,15 +221,15 @@ def add_top_right_logo(ax, logo_bytes: bytes | None):
 def render_species_map(
     species_name: str,
     sp_df: pd.DataFrame,
-    conservancies: list[tuple[str, gpd.GeoDataFrame, str]],
-    rivers_gdf: gpd.GeoDataFrame | None,
+    conservancies: list,
+    rivers_gdf,
     rivers_label: str,
-    roads_gdf: gpd.GeoDataFrame | None,
+    roads_gdf,
     roads_label: str,
-    ranger_posts_gdf: gpd.GeoDataFrame | None,
+    ranger_posts_gdf,
     ranger_posts_label: str,
     label_ranger_posts: bool,
-    logo_bytes: bytes | None,
+    logo_bytes,
     report_period: str,
     marker_color: str = "#D92323",
     zoom_level: int = 11,
@@ -256,16 +257,4 @@ def render_species_map(
     if bounds_list:
         min_lon = min(b[0] for b in bounds_list)
         min_lat = min(b[1] for b in bounds_list)
-        max_lon = max(b[2] for b in bounds_list)
-        max_lat = max(b[3] for b in bounds_list)
-    else:
-        min_lon, min_lat, max_lon, max_lat = 34.75, -1.65, 35.30, -1.24
-
-    lon_span = max(max_lon - min_lon, 0.05)
-    lat_span = max(max_lat - min_lat, 0.05)
-    min_lon -= lon_span * 0.10
-    max_lon += lon_span * 0.10
-    min_lat -= lat_span * 0.10
-    max_lat += lat_span * 0.10
-
-    fig, ax = plt.
+        max_lon = max(b[2] for
