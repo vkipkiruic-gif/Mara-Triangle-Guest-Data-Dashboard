@@ -257,4 +257,437 @@ def render_species_map(
     if bounds_list:
         min_lon = min(b[0] for b in bounds_list)
         min_lat = min(b[1] for b in bounds_list)
-        max_lon = max(b[2] for
+        max_lon = max(b[2] for b in bounds_list)
+        max_lat = max(b[3] for b in bounds_list)
+    else:
+        min_lon, min_lat, max_lon, max_lat = 34.75, -1.65, 35.30, -1.24
+
+    lon_span = max(max_lon - min_lon, 0.05)
+    lat_span = max(max_lat - min_lat, 0.05)
+    min_lon -= lon_span * 0.10
+    max_lon += lon_span * 0.10
+    min_lat -= lat_span * 0.10
+    max_lat += lat_span * 0.10
+
+    fig, ax = plt.subplots(figsize=(11.5, 8.2), dpi=220)
+
+    # 1. OpenTopoMap Basemap
+    basemap_img, extent = fetch_opentopomap_basemap(min_lon, min_lat, max_lon, max_lat, zoom=zoom_level)
+    ax.imshow(basemap_img, extent=extent, aspect="auto", zorder=1)
+    ax.set_xlim(min_lon, max_lon)
+    ax.set_ylim(min_lat, max_lat)
+
+    legend_handles = []
+
+    # 2. Conservancy / Patrol Area Boundaries
+    for idx, (layer_label, c_gdf, edge_color) in enumerate(conservancies):
+        if c_gdf.empty:
+            continue
+        c_gdf.plot(
+            ax=ax,
+            facecolor="none",
+            edgecolor=edge_color,
+            linewidth=2.3,
+            linestyle="-" if idx == 0 else "--",
+            zorder=5 + idx
+        )
+        c_gdf.plot(ax=ax, facecolor=edge_color, alpha=0.06, edgecolor="none", zorder=4)
+
+        unique_names = [n for n in c_gdf["Display_Name"].unique() if n]
+        if label_conservancies_on_map:
+            for _, row in c_gdf.iterrows():
+                if row.geometry is not None and not row.geometry.is_empty:
+                    pt = row.geometry.representative_point()
+                    if min_lon <= pt.x <= max_lon and min_lat <= pt.y <= max_lat:
+                        ax.text(
+                            pt.x,
+                            pt.y,
+                            str(row["Display_Name"]).upper(),
+                            fontsize=8.0,
+                            fontweight="bold",
+                            color=edge_color,
+                            ha="center",
+                            va="center",
+                            bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=edge_color, alpha=0.78, lw=0.8),
+                            zorder=9
+                        )
+
+        disp_legend_name = ", ".join(unique_names[:3]) if len(unique_names) > 1 else (unique_names[0] if unique_names else layer_label)
+        legend_handles.append(
+            mpatches.Patch(
+                facecolor="none",
+                edgecolor=edge_color,
+                linewidth=2.2,
+                linestyle="-" if idx == 0 else "--",
+                label=f"{disp_legend_name}"
+            )
+        )
+
+    # 3. Roads & Tracks Overlay
+    if roads_gdf is not None and not roads_gdf.empty:
+        roads_gdf.plot(ax=ax, color="#5C4033", linewidth=1.1, linestyle="-", alpha=0.82, zorder=6)
+        legend_handles.append(
+            mlines.Line2D([], [], color="#5C4033", linewidth=1.6, linestyle="-", label=roads_label)
+        )
+
+    # 4. Rivers & Luggas Overlay
+    if rivers_gdf is not None and not rivers_gdf.empty:
+        rivers_gdf.plot(ax=ax, color="#0066CC", linewidth=1.35, alpha=0.88, zorder=7)
+        legend_handles.append(
+            mlines.Line2D([], [], color="#0066CC", linewidth=1.8, label=rivers_label)
+        )
+
+    # 5. Ranger Posts / Stations Overlay
+    if ranger_posts_gdf is not None and not ranger_posts_gdf.empty:
+        pts_x = [geom.representative_point().x for geom in ranger_posts_gdf.geometry if geom is not None and not geom.is_empty]
+        pts_y = [geom.representative_point().y for geom in ranger_posts_gdf.geometry if geom is not None and not geom.is_empty]
+        ax.scatter(
+            pts_x,
+            pts_y,
+            s=85,
+            marker="^",
+            c="#1E8449",
+            edgecolors="white",
+            linewidths=1.0,
+            zorder=11
+        )
+        if label_ranger_posts:
+            for _, row in ranger_posts_gdf.iterrows():
+                if row.geometry is not None and not row.geometry.is_empty:
+                    pt = row.geometry.representative_point()
+                    if min_lon <= pt.x <= max_lon and min_lat <= pt.y <= max_lat:
+                        ax.annotate(
+                            str(row["Display_Name"]),
+                            xy=(pt.x, pt.y),
+                            xytext=(4, 4),
+                            textcoords="offset points",
+                            fontsize=7.2,
+                            fontweight="bold",
+                            color="#145A32",
+                            bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="#1E8449", alpha=0.82, lw=0.6),
+                            zorder=13
+                        )
+        legend_handles.append(
+            mlines.Line2D(
+                [], [],
+                color="white",
+                marker="^",
+                markerfacecolor="#1E8449",
+                markeredgecolor="white",
+                markersize=9.5,
+                label=ranger_posts_label
+            )
+        )
+
+    # 6. Species Sightings Points
+    total_sightings = len(sp_df)
+    if total_sightings > 0:
+        ax.scatter(
+            sp_df["Lon"],
+            sp_df["Lat"],
+            s=68,
+            c=marker_color,
+            edgecolors="white",
+            linewidths=1.1,
+            alpha=0.92,
+            zorder=14
+        )
+
+    legend_handles.insert(
+        0,
+        mlines.Line2D(
+            [], [],
+            color="white",
+            marker="o",
+            markerfacecolor=marker_color,
+            markeredgecolor="white",
+            markersize=9,
+            label=f"{species_name} Sightings (n = {total_sightings})"
+        )
+    )
+
+    # 7. Cartographic North Arrow & Bearing Rose + Scale Bar + Logo
+    draw_compass_and_bearing(ax, x_frac=0.075, y_frac=0.88)
+    draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat)
+    add_top_right_logo(ax, logo_bytes)
+
+    # 8. Legend (Bottom-Right)
+    leg = ax.legend(
+        handles=legend_handles,
+        loc="lower right",
+        title="MAP LEGEND",
+        frameon=True,
+        facecolor="white",
+        edgecolor="#1F4E78",
+        framealpha=0.94,
+        fontsize=8.2,
+        title_fontsize=9.0
+    )
+    leg.get_title().set_fontweight("bold")
+    leg.set_zorder(22)
+
+    # 9. Title & Coordinate Frame
+    title_line_1 = f"{species_name.upper()} DISTRIBUTION MAP — {report_period.upper()}"
+    title_line_2 = f"Total Sightings Recorded: {total_sightings}   |   Basemap: OpenTopoMap"
+    ax.set_title(
+        title_line_1 + chr(10) + title_line_2,
+        fontsize=12.5,
+        fontweight="bold",
+        color="#1F4E78",
+        pad=12
+    )
+    ax.set_xlabel("Longitude (°E)", fontsize=9.5, fontweight="bold")
+    ax.set_ylabel("Latitude (°S)", fontsize=9.5, fontweight="bold")
+    ax.tick_params(axis="both", labelsize=8.5)
+    ax.grid(True, linestyle=":", linewidth=0.5, color="#555555", alpha=0.45, zorder=2)
+
+    ax.text(
+        0.5, 0.008,
+        "Map Data: © OpenStreetMap contributors, SRTM | Map Style: © OpenTopoMap (CC-BY-SA)",
+        transform=ax.transAxes,
+        fontsize=6.5,
+        color="#333333",
+        ha="center",
+        va="bottom",
+        bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1),
+        zorder=15
+    )
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ==============================================================================
+# STREAMLIT PAGE UI
+# ==============================================================================
+st.title("🗺️ Wildlife Sightings Distribution Maps (Per Species)")
+st.markdown(
+    "Generate individual cartographic distribution maps for each wildlife species over **OpenTopoMap** (`tile.opentopomap.org`), "
+    "complete with **conservancy/patrol boundaries**, **roads**, **rivers & luggas**, **ranger posts**, **company logo**, **North/bearing rose**, and **scale bar**."
+)
+
+# --- TOP UPLOADERS ---
+col1, col2 = st.columns(2)
+with col1:
+    sightings_file = st.file_uploader(
+        "1️⃣ Upload EarthRanger Wildlife Sightings CSV / Excel (`Event Export ...csv`)",
+        type=["csv", "xlsx", "xls"],
+        key="wildlife_csv_uploader"
+    )
+    logo_file = st.file_uploader(
+        "2️⃣ Upload Company Logo (PNG / JPG — placed in Top-Right)",
+        type=["png", "jpg", "jpeg"],
+        key="company_logo_uploader"
+    )
+    conservancy_zips = st.file_uploader(
+        "3️⃣ Upload Conservancy / Patrol Area Boundary Shapefiles (`.zip` — one or multiple)",
+        type=["zip"],
+        accept_multiple_files=True,
+        key="conservancy_zip_uploader"
+    )
+
+with col2:
+    roads_zip = st.file_uploader(
+        "4️⃣ Upload Roads & Tracks Shapefile (`.zip`)",
+        type=["zip"],
+        key="roads_zip_uploader"
+    )
+    rivers_zip = st.file_uploader(
+        "5️⃣ Upload Rivers & Luggas Shapefile (`.zip`)",
+        type=["zip"],
+        key="rivers_zip_uploader"
+    )
+    ranger_posts_zip = st.file_uploader(
+        "6️⃣ Upload Ranger Posts / Stations Shapefile (`.zip`)",
+        type=["zip"],
+        key="ranger_posts_zip_uploader"
+    )
+
+with st.sidebar:
+    st.subheader("Map Styling & Legend Labels")
+    report_period = st.text_input("Report Period Label", value="November 2026", key="map_period_label")
+    zoom_level = st.slider("OpenTopoMap Tile Zoom Level", min_value=9, max_value=13, value=11, key="topo_zoom")
+    roads_legend_name = st.text_input("Roads Legend Label", value="Roads & Tracks", key="roads_legend_txt")
+    rivers_legend_name = st.text_input("Rivers & Luggas Legend Label", value="Rivers & Luggas", key="rivers_legend_txt")
+    ranger_legend_name = st.text_input("Ranger Posts Legend Label", value="Ranger Posts", key="ranger_legend_txt")
+    show_poly_labels = st.checkbox("Label Conservancy / Patrol Areas on Map", value=True, key="show_poly_names")
+    show_post_labels = st.checkbox("Label Ranger Posts on Map", value=True, key="show_post_names")
+
+if sightings_file is not None:
+    if sightings_file.name.lower().endswith((".xlsx", ".xls")):
+        raw_df = pd.read_excel(sightings_file)
+    else:
+        raw_df = pd.read_csv(sightings_file)
+
+    raw_df.columns = [str(c).strip() for c in raw_df.columns]
+    sp_col = next((c for c in raw_df.columns if c.lower() == "species"), None)
+    lat_col = next((c for c in raw_df.columns if "lat" in c.lower()), None)
+    lon_col = next((c for c in raw_df.columns if "lon" in c.lower()), None)
+
+    if not sp_col or not lat_col or not lon_col:
+        st.error("Uploaded sightings file must contain 'Species', 'Latitude', and 'Longitude' columns.")
+        st.stop()
+
+    raw_df["Species_Clean"] = (
+        raw_df[sp_col]
+        .fillna("Unknown")
+        .astype(str)
+        .str.replace("(inform Monitoring Team)", "", regex=False)
+        .str.strip()
+    )
+    raw_df["Lat"] = pd.to_numeric(raw_df[lat_col], errors="coerce")
+    raw_df["Lon"] = pd.to_numeric(raw_df[lon_col], errors="coerce")
+    raw_df["Count_Raw"] = pd.to_numeric(raw_df["Count"], errors="coerce").fillna(1) if "Count" in raw_df.columns else 1
+    raw_df["Count_Clean"] = np.where(raw_df["Count_Raw"] > 50000, np.nan, raw_df["Count_Raw"])
+
+    valid_geo_df = raw_df.dropna(subset=["Lat", "Lon"]).copy()
+
+    # Load Conservancy ZIP shapefiles
+    conservancies_loaded = []
+    boundary_palette = ["#1B4F72", "#7D3C98", "#B9770E", "#117864", "#922B21", "#2874A6"]
+    if conservancy_zips:
+        st.subheader("Uploaded Conservancy / Patrol Area Boundaries")
+        name_cols = st.columns(min(len(conservancy_zips), 3))
+        for idx, zfile in enumerate(conservancy_zips):
+            default_label = os.path.splitext(zfile.name)[0].replace("_", " ").title()
+            with name_cols[idx % len(name_cols)]:
+                custom_name = st.text_input(
+                    f"Boundary {idx + 1} Name ({zfile.name})",
+                    value=default_label,
+                    key=f"cons_name_{idx}_{zfile.name}"
+                )
+            try:
+                gdf_c = load_shapefile_zip(zfile, fallback_name=custom_name)
+                if gdf_c["Display_Name"].nunique() == 1 and gdf_c["Display_Name"].iloc[0] == default_label:
+                    gdf_c["Display_Name"] = custom_name
+                conservancies_loaded.append((custom_name, gdf_c, boundary_palette[idx % len(boundary_palette)]))
+            except Exception as e:
+                st.warning(f"Could not read {zfile.name}: {e}")
+
+    # Load Roads, Rivers & Luggas, and Ranger Posts ZIP shapefiles
+    roads_gdf = None
+    if roads_zip is not None:
+        try:
+            roads_gdf = load_shapefile_zip(roads_zip, fallback_name=roads_legend_name)
+        except Exception as e:
+            st.warning(f"Could not read Roads shapefile: {e}")
+
+    rivers_gdf = None
+    if rivers_zip is not None:
+        try:
+            rivers_gdf = load_shapefile_zip(rivers_zip, fallback_name=rivers_legend_name)
+        except Exception as e:
+            st.warning(f"Could not read Rivers/Luggas shapefile: {e}")
+
+    ranger_posts_gdf = None
+    if ranger_posts_zip is not None:
+        try:
+            ranger_posts_gdf = load_shapefile_zip(ranger_posts_zip, fallback_name=ranger_legend_name)
+        except Exception as e:
+            st.warning(f"Could not read Ranger Posts shapefile: {e}")
+
+    logo_bytes = logo_file.getvalue() if logo_file is not None else None
+
+    # --- SUMMARY TABLE: TOTAL SIGHTINGS PER SPECIES ---
+    species_summary = (
+        raw_df.groupby("Species_Clean", as_index=False)
+        .agg(
+            **{
+                "Total Sightings": ("Species_Clean", "count"),
+                "Mapped GPS Sightings": ("Lat", lambda s: int(s.notna().sum())),
+                "Recorded Individuals (Cleaned)": ("Count_Clean", lambda s: int(s.sum())),
+            }
+        )
+        .sort_values(by="Total Sightings", ascending=False)
+        .reset_index(drop=True)
+    )
+    species_summary["Share of Sightings (%)"] = (
+        species_summary["Total Sightings"] / species_summary["Total Sightings"].sum() * 100
+    ).round(2)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Wildlife Sightings", f"{len(raw_df):,}")
+    m2.metric("Unique Species Recorded", f"{len(species_summary)}")
+    m3.metric("Top Sighted Species", species_summary.iloc[0]["Species_Clean"], delta=f"{species_summary.iloc[0]['Total Sightings']} sightings", delta_color="off")
+    active_layers = len(conservancies_loaded) + int(roads_gdf is not None) + int(rivers_gdf is not None) + int(ranger_posts_gdf is not None)
+    m4.metric("Active GIS Map Layers", f"{active_layers} layers")
+
+    st.subheader(f"1. Total Number of Sightings per Species ({report_period})")
+    st.dataframe(species_summary, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- GENERATE PER-SPECIES MAPS ---
+    st.subheader(f"2. Per-Species Wildlife Distribution Maps ({report_period})")
+    all_species_list = species_summary["Species_Clean"].tolist()
+    default_selected = all_species_list[:6]
+
+    selected_species = st.multiselect(
+        "Select Species to Generate Individual Maps For (each species gets its own full map):",
+        options=all_species_list,
+        default=default_selected
+    )
+
+    marker_palette = [
+        "#D92323", "#E67E22", "#8E44AD", "#16A085", "#C0392B",
+        "#2980B9", "#D35400", "#27AE60", "#884EA0", "#B03A2E"
+    ]
+
+    if selected_species:
+        if st.button("🗺️ Generate All Selected Species Maps & ZIP Bundle", type="primary"):
+            zip_buffer = io.BytesIO()
+            generated_maps = {}
+
+            progress = st.progress(0)
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx, sp in enumerate(selected_species):
+                    sp_subset = valid_geo_df[valid_geo_df["Species_Clean"] == sp]
+                    color = marker_palette[idx % len(marker_palette)]
+                    png_bytes = render_species_map(
+                        species_name=sp,
+                        sp_df=sp_subset,
+                        conservancies=conservancies_loaded,
+                        rivers_gdf=rivers_gdf,
+                        rivers_label=rivers_legend_name,
+                        roads_gdf=roads_gdf,
+                        roads_label=roads_legend_name,
+                        ranger_posts_gdf=ranger_posts_gdf,
+                        ranger_posts_label=ranger_legend_name,
+                        label_ranger_posts=show_post_labels,
+                        logo_bytes=logo_bytes,
+                        report_period=report_period,
+                        marker_color=color,
+                        zoom_level=zoom_level,
+                        label_conservancies_on_map=show_poly_labels
+                    )
+                    generated_maps[sp] = png_bytes
+                    safe_sp = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in sp).strip().replace(" ", "_")
+                    zf.writestr(f"{safe_sp}_Sightings_Map_{report_period.replace(' ', '_')}.png", png_bytes)
+                    progress.progress((idx + 1) / len(selected_species))
+
+            zip_buffer.seek(0)
+            st.download_button(
+                label=f"📦 Download All {len(selected_species)} Species Maps (.ZIP)",
+                data=zip_buffer,
+                file_name=f"Mara_Triangle_Species_Maps_{report_period.replace(' ', '_')}.zip",
+                mime="application/zip"
+            )
+
+            cols = st.columns(2)
+            for idx, sp in enumerate(selected_species):
+                with cols[idx % 2]:
+                    st.image(generated_maps[sp], caption=f"{sp} — Total Sightings: {len(valid_geo_df[valid_geo_df['Species_Clean'] == sp])}", use_container_width=True)
+                    safe_sp = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in sp).strip().replace(" ", "_")
+                    st.download_button(
+                        label=f"📥 Download {sp} Map (.png)",
+                        data=generated_maps[sp],
+                        file_name=f"{safe_sp}_Map.png",
+                        mime="image/png",
+                        key=f"dl_map_{idx}_{safe_sp}"
+                    )
+else:
+    st.info("👆 Upload your **EarthRanger Wildlife Sightings CSV**, **Conservancy Boundary ZIP Shapefiles**, **Roads ZIP**, **Rivers & Luggas ZIP**, **Ranger Posts ZIP**, and **Company Logo** above to generate maps for each species.")
