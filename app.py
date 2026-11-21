@@ -142,6 +142,8 @@ KNOWN_PAGE_META = {
     "rainfall": ("Weather Summary", "🌦️", "arrivals"),
     "balloon": ("Balloon Reports", "🎈", "arrivals"),
     "rhino": ("Rhino Details", "🦏", "mapping"),
+    "camp": ("Camps & MEP Fences", "🏕️", "mapping"),
+    "fence": ("Camps & MEP Fences", "🏕️", "mapping"),
     "wildlife": ("Wildlife Sightings Maps", "🗺️", "mapping"),
     "sighting": ("Wildlife Sightings Maps", "🗺️", "mapping"),
     "patrol": ("Patrol Tracks Maps", "🛰️", "mapping"),
