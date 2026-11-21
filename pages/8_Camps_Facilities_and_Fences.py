@@ -266,7 +266,7 @@ def get_features_bounds(features: list[dict], clip_near_box=None):
     Computes (min_lon, min_lat, max_lon, max_lat) for features.
     If `clip_near_box` = (ref_min_lon, ref_min_lat, ref_max_lon, ref_max_lat) is passed,
     only features intersecting within 0.45° of that reference box are included so far-away
-    polygons (e.g., national or distant parks across Kenya) never zoom the map out.
+    polygons never zoom the map out.
     """
     xs, ys = [], []
     for feat in features:
@@ -311,7 +311,7 @@ def get_feature_centroid(feat: dict):
 
 
 # ==============================================================================
-# 2. PARSE CAMPS & FACILITIES CSV + MARA ELEPHANT PROJECT (MEP) FENCES DATA
+# 2. PARSE CAMPS, AIRSTRIPS CSV & MARA ELEPHANT PROJECT (MEP) FENCES DATA
 # ==============================================================================
 def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True) -> pd.DataFrame:
     """
@@ -357,6 +357,55 @@ def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True)
 
     work["Reported_By"] = work["Reported_By"].fillna("").astype(str).str.strip() if "Reported_By" in work.columns else ""
     work["Report_Id"] = work["Report_Id"].fillna("").astype(str).str.strip() if "Report_Id" in work.columns else ""
+
+    if deduplicate:
+        work["_lat_r"] = work["Lat"].round(5)
+        work["_lon_r"] = work["Lon"].round(5)
+        work["_name_norm"] = work["Name"].str.lower()
+        work = work.drop_duplicates(subset=["_name_norm", "_lat_r", "_lon_r"], keep="first").drop(
+            columns=["_lat_r", "_lon_r", "_name_norm"]
+        )
+
+    return work.reset_index(drop=True)
+
+
+def parse_airstrips_dataframe(df: pd.DataFrame, deduplicate: bool = True) -> pd.DataFrame:
+    """
+    Parses Airstrips CSV/Excel into a standardized DataFrame:
+    Columns: Name, Code, Surface, Lat, Lon
+    """
+    work = df.copy()
+    work.columns = [str(c).strip() for c in work.columns]
+
+    lat_col = next((c for c in work.columns if c.lower() == "latitude" or "lat" in c.lower()), None)
+    lon_col = next((c for c in work.columns if c.lower() == "longitude" or "lon" in c.lower()), None)
+    if not lat_col or not lon_col:
+        raise ValueError("Airstrips file must contain 'Latitude' and 'Longitude' columns.")
+
+    name_col = next(
+        (c for c in work.columns if any(k in c.lower() for k in ["airstrip_name", "name_of_airstrip", "facility_name", "airstrip", "name"])),
+        None
+    )
+    code_col = next(
+        (c for c in work.columns if any(k in c.lower() for k in ["icao", "iata", "code", "id"])),
+        None
+    )
+    surf_col = next(
+        (c for c in work.columns if any(k in c.lower() for k in ["surface", "type", "runway", "status", "description"])),
+        None
+    )
+
+    work["Lat"] = pd.to_numeric(work[lat_col], errors="coerce")
+    work["Lon"] = pd.to_numeric(work[lon_col], errors="coerce")
+    work = work.dropna(subset=["Lat", "Lon"]).copy()
+
+    if name_col:
+        work["Name"] = work[name_col].fillna("Airstrip").astype(str).str.strip().str.rstrip(".").str.strip()
+    else:
+        work["Name"] = [f"Airstrip {i + 1}" for i in range(len(work))]
+
+    work["Code"] = work[code_col].fillna("").astype(str).str.strip() if code_col else ""
+    work["Surface"] = work[surf_col].fillna("Airstrip").astype(str).str.strip() if surf_col else "Airstrip"
 
     if deduplicate:
         work["_lat_r"] = work["Lat"].round(5)
@@ -546,26 +595,26 @@ def parse_mep_fence_attribute_csv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==============================================================================
-# 3. RELIABLE MULTI-PROVIDER BASEMAP TILE STITCHER (ESRI TOPO / CARTO / OPENTOPO)
+# 3. RELIABLE BRIGHT BASEMAP TILE STITCHER (OPENTOPOMAP / CARTO / ESRI TOPO)
 # ==============================================================================
 BASEMAP_PROVIDERS = {
-    "Esri World Topographic (Recommended — Fast & Reliable)": [
+    "OpenTopoMap (Bright Contour & Terrain — Recommended)": [
+        "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    ],
+    "CartoDB Voyager (Clean Light Pastel Terrain)": [
         "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
         "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
     ],
-    "OpenTopoMap (Contour & Terrain)": [
+    "Esri World Topographic": [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
         "https://tile.opentopomap.org/{z}/{x}/{y}.png",
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-    ],
-    "CartoDB Voyager (Clean Pastel Terrain)": [
-        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
     ],
     "Esri World Imagery (Satellite)": [
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        "https://tile.opentopomap.org/{z}/{x}/{y}.png",
     ],
 }
 
@@ -587,7 +636,7 @@ def fetch_basemap_tiles(
     max_lon: float,
     max_lat: float,
     zoom: int = 11,
-    provider_label: str = "Esri World Topographic (Recommended — Fast & Reliable)",
+    provider_label: str = "OpenTopoMap (Bright Contour & Terrain — Recommended)",
 ):
     def deg2num(lat_deg, lon_deg, z):
         lat_rad = math.radians(max(min(lat_deg, 85.0511), -85.0511))
@@ -613,11 +662,11 @@ def fetch_basemap_tiles(
 
     cols = max(x_max - x_min + 1, 1)
     rows = max(y_max - y_min + 1, 1)
-    canvas = Image.new("RGB", (cols * 256, rows * 256), (242, 239, 233))
+    canvas = Image.new("RGB", (cols * 256, rows * 256), (247, 246, 242))
 
     url_templates = BASEMAP_PROVIDERS.get(
         provider_label,
-        BASEMAP_PROVIDERS["Esri World Topographic (Recommended — Fast & Reliable)"]
+        BASEMAP_PROVIDERS["OpenTopoMap (Bright Contour & Terrain — Recommended)"]
     )
 
     for x in range(x_min, x_max + 1):
@@ -800,7 +849,7 @@ def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> 
 
 
 # ==============================================================================
-# 5. CUSTOM A-FRAME TENT / CAMP TRIANGLE ICON & STYLES
+# 5. CUSTOM A-FRAME TENT & AIRSTRIP ICONS & STYLES
 # ==============================================================================
 def _build_safari_tent_marker() -> mpath.Path:
     """Creates a crisp A-frame safari tent triangle icon with a central doorway flap."""
@@ -825,7 +874,36 @@ def _build_safari_tent_marker() -> mpath.Path:
     return mpath.Path(verts, codes)
 
 
+def _build_airstrip_marker() -> mpath.Path:
+    """Creates a crisp airplane silhouette marker for airstrips."""
+    verts = [
+        (0.0, 1.05),      # Nose
+        (0.18, 0.35),
+        (1.05, -0.10),    # Right wingtip
+        (1.05, -0.32),
+        (0.18, -0.15),
+        (0.16, -0.72),
+        (0.50, -0.95),    # Right tailplane
+        (0.50, -1.08),
+        (0.0, -0.92),
+        (-0.50, -1.08),   # Left tailplane
+        (-0.50, -0.95),
+        (-0.16, -0.72),
+        (-0.18, -0.15),
+        (-1.05, -0.32),   # Left wingtip
+        (-1.05, -0.10),
+        (-0.18, 0.35),
+        (0.0, 1.05),
+    ]
+    codes = [mpath.Path.MOVETO] + [mpath.Path.LINETO] * (len(verts) - 2) + [mpath.Path.CLOSEPOLY]
+    return mpath.Path(verts, codes)
+
+
 TENT_CAMP_MARKER = _build_safari_tent_marker()
+AIRSTRIP_MARKER = _build_airstrip_marker()
+AIRSTRIP_COLOR = "#111827"             # High-contrast charcoal/black airplane icon with white outline
+AIRSTRIP_LEGEND_LABEL = "Airstrips"
+
 UNIFIED_FACILITY_COLOR = "#0057FF"     # Vivid cobalt blue — stands out sharply against red/orange fences & terrain
 UNIFIED_FACILITY_MARKER = TENT_CAMP_MARKER
 UNIFIED_FACILITY_LABEL = "Tented Camps & Lodges"
@@ -839,11 +917,23 @@ FACILITY_STYLE_PALETTE = {
     "Gate": ("#1F4E78", "v"),
     "Cottage": ("#8E44AD", "v"),
     "Villa": ("#2E4053", "h"),
-    "Airstrip": ("#2C3E50", "h"),
+    "Airstrip": (AIRSTRIP_COLOR, AIRSTRIP_MARKER),
 }
 FALLBACK_FACILITY_STYLES = [
     ("#0057FF", TENT_CAMP_MARKER), ("#8E44AD", "s"), ("#16A085", "D"),
     ("#2980B9", "P"), ("#1F618D", "^"), ("#6C3483", "v"),
+]
+
+# Distinct, vivid non-opaque colors for Conservancy / Park boundary polygons
+CONSERVANCY_DISTINCT_PALETTE = [
+    "#1E8449",  # Emerald Forest Green (e.g., Maasai Mara / Mara Triangle)
+    "#1B4F72",  # Deep Royal Navy Blue (e.g., Mara North / Olare Motorogi)
+    "#8E44AD",  # Rich Plum Violet (e.g., Naboisho / Ol Kinyei)
+    "#B9770E",  # Warm Ochre Gold (e.g., Lemek / Ol Chorro)
+    "#0E6251",  # Deep Teal (e.g., Pardamat / Siana)
+    "#922B21",  # Crimson Terracotta (e.g., Olarro / Isaaten)
+    "#2874A6",  # Cerulean Blue
+    "#6C3483",  # Indigo Purple
 ]
 
 FENCE_BROAD_STYLES = {
@@ -882,13 +972,14 @@ PAPER_SIZES_INCHES = {
 def render_camps_and_fences_map(
     map_title: str,
     camps_df: pd.DataFrame,
+    airstrips_df: pd.DataFrame,
     fence_features: list[dict],
     fence_breakdown_mode: str,
     focus_on_facilities_extent: bool = True,
     group_all_facilities_as_one: bool = True,
     show_legend_counts: bool = False,
     paper_size_label: str = "Large Poster / A2 Landscape (23.4 × 16.5 in) — Best Visibility",
-    basemap_provider: str = "Esri World Topographic (Recommended — Fast & Reliable)",
+    basemap_provider: str = "OpenTopoMap (Bright Contour & Terrain — Recommended)",
     conservancies: list = None,
     rivers_features: list = None,
     rivers_label: str = "Rivers & Luggas",
@@ -902,31 +993,32 @@ def render_camps_and_fences_map(
     zoom_level: int = 11,
     include_camp_names_in_legend: bool = False,
     label_camps_on_map: bool = False,
+    label_airstrips_on_map: bool = True,
     label_conservancies_on_map: bool = True,
     logo_scale_pct: int = 60,
-    area_fill_alpha: float = 0.20,
+    area_fill_alpha: float = 0.18,
     marker_scale_pct: int = 125,
 ) -> bytes:
     """
-    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges (with tent
-    triangle icons) overlaid with fencing data (Mara Elephant Project), zoomed cleanly onto the
-    local Mara area and shifted left so the lower-right legend sits in open space without overlap.
+    Renders a bright, large-format cartographic map of Tented Camps & Lodges (tent triangle icons),
+    Airstrips (airplane icons), translucent distinct-color Conservancy Polygons, and Fencing Data
+    (sourced from Mara Elephant Project), shifted flush-left so the lower-right legend sits in open space.
     """
     conservancies = conservancies or []
     rivers_features = rivers_features or []
     roads_features = roads_features or []
     ranger_features = ranger_features or []
 
-    # Anchor reference box on the Tented Camps & Lodges so far-away polygons
-    # (such as national or distant parks across Kenya) never zoom the map out!
-    camps_ref_box = None
+    # Anchor reference box on Camps + Airstrips so far-away polygons never zoom the map out
+    ref_lons, ref_lats = [], []
     if len(camps_df) > 0:
-        camps_ref_box = (
-            float(camps_df["Lon"].min()),
-            float(camps_df["Lat"].min()),
-            float(camps_df["Lon"].max()),
-            float(camps_df["Lat"].max()),
-        )
+        ref_lons.extend([float(camps_df["Lon"].min()), float(camps_df["Lon"].max())])
+        ref_lats.extend([float(camps_df["Lat"].min()), float(camps_df["Lat"].max())])
+    if len(airstrips_df) > 0:
+        ref_lons.extend([float(airstrips_df["Lon"].min()), float(airstrips_df["Lon"].max())])
+        ref_lats.extend([float(airstrips_df["Lat"].min()), float(airstrips_df["Lat"].max())])
+
+    camps_ref_box = (min(ref_lons), min(ref_lats), max(ref_lons), max(ref_lats)) if ref_lons else None
 
     bounds_list = []
     if camps_ref_box is not None:
@@ -953,9 +1045,9 @@ def render_camps_and_fences_map(
     lon_span = max(max_lon - min_lon, 0.05)
     lat_span = max(max_lat - min_lat, 0.05)
 
-    # Tight left margin (3%) so the map shifts left to fill the empty left space,
+    # Tight left margin (3%) so the map shifts left to fill empty space,
     # and generous right/bottom margin (15% right, 11% bottom, 7% top) so the lower-right legend
-    # sits in open space without covering southeastern camps or fence segments!
+    # sits in open space without covering southeastern camps or fence segments.
     min_lon = min_lon - lon_span * 0.03
     max_lon = max_lon + lon_span * 0.15
     min_lat = min_lat - lat_span * 0.11
@@ -975,8 +1067,6 @@ def render_camps_and_fences_map(
         desired_ground_w = ground_height * target_aspect
         desired_lon_span = desired_ground_w / cos_lat
         extra_lon = desired_lon_span - cur_lon_span
-        # Shift 90% of the extra width to the right side and only 10% to the left
-        # so the map sits flush-left and creates clean open space on the lower right for the legend!
         min_lon -= extra_lon * 0.10
         max_lon += extra_lon * 0.90
     else:
@@ -987,19 +1077,22 @@ def render_camps_and_fences_map(
 
     size_mult = fig_w / 14.0
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=220)
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    # 1. Basemap Layer
+    # 1. Bright Basemap Layer (OpenTopoMap default + slight white blend for high clarity)
     basemap_img, extent = fetch_basemap_tiles(
         min_lon, min_lat, max_lon, max_lat, zoom=zoom_level, provider_label=basemap_provider
     )
-    ax.imshow(basemap_img, extent=extent, aspect="auto", zorder=1)
+    ax.imshow(basemap_img, extent=extent, aspect="auto", alpha=0.88, zorder=1)
     ax.set_xlim(min_lon, max_lon)
     ax.set_ylim(min_lat, max_lat)
     ax.set_aspect(1.0 / cos_lat, adjustable="box")
 
     legend_handles = []
 
-    # 2. Conservancy / Park Boundaries
+    # 2. Conservancy / Park Boundaries (Distinct Color + Non-Opaque Translucent Polygon Fill)
+    fill_alpha = min(max(area_fill_alpha, 0.08), 0.45) if area_fill_alpha > 0 else 0.0
     for idx, (layer_label, c_feats, edge_color) in enumerate(conservancies):
         if not c_feats:
             continue
@@ -1011,17 +1104,17 @@ def render_camps_and_fences_map(
             for ring in feat["parts"]:
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                if feat["geom_type"] == "Polygon" and area_fill_alpha > 0:
+                if feat["geom_type"] == "Polygon" and fill_alpha > 0:
                     poly = mpatches.Polygon(
                         ring,
                         closed=True,
                         facecolor=edge_color,
                         edgecolor="none",
-                        alpha=area_fill_alpha,
+                        alpha=fill_alpha,  # Non-opaque translucent tint so terrain, rivers & fences shine through
                         zorder=3
                     )
                     ax.add_patch(poly)
-                ax.plot(xs, ys, color=edge_color, linewidth=2.2 * size_mult * 0.85, linestyle=lstyle, zorder=5 + idx)
+                ax.plot(xs, ys, color=edge_color, linewidth=2.3 * size_mult * 0.85, linestyle=lstyle, alpha=0.95, zorder=5 + idx)
 
             if label_conservancies_on_map:
                 cen = get_feature_centroid(feat)
@@ -1035,16 +1128,16 @@ def render_camps_and_fences_map(
                         color=edge_color,
                         ha="center",
                         va="center",
-                        bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor=edge_color, alpha=0.80, lw=0.9),
+                        bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor=edge_color, alpha=0.85, lw=0.9),
                         zorder=9
                     )
 
         disp_legend_name = ", ".join(unique_names[:3]) if len(unique_names) > 1 else (unique_names[0] if unique_names else layer_label)
         legend_handles.append(
             mpatches.Patch(
-                facecolor=edge_color if area_fill_alpha > 0 else "none",
+                facecolor=edge_color if fill_alpha > 0 else "none",
                 edgecolor=edge_color,
-                alpha=min(area_fill_alpha + 0.12, 0.65) if area_fill_alpha > 0 else 1.0,
+                alpha=min(fill_alpha + 0.14, 0.55) if fill_alpha > 0 else 1.0,
                 linewidth=2.0,
                 linestyle=lstyle,
                 label=disp_legend_name
@@ -1068,7 +1161,7 @@ def render_camps_and_fences_map(
             for ring in feat["parts"]:
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                ax.plot(xs, ys, color="#0066CC", linewidth=1.3 * size_mult * 0.8, linestyle="-", alpha=0.80, zorder=7)
+                ax.plot(xs, ys, color="#0066CC", linewidth=1.3 * size_mult * 0.8, linestyle="-", alpha=0.82, zorder=7)
         legend_handles.append(
             mlines.Line2D([], [], color="#0066CC", linewidth=1.9, label=rivers_label)
         )
@@ -1219,7 +1312,7 @@ def render_camps_and_fences_map(
                             fontsize=6.2,
                             fontweight="bold",
                             color="#111111",
-                            bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=UNIFIED_FACILITY_COLOR, alpha=0.78, lw=0.5),
+                            bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=UNIFIED_FACILITY_COLOR, alpha=0.80, lw=0.5),
                             zorder=17
                         )
         else:
@@ -1277,15 +1370,59 @@ def render_camps_and_fences_map(
                                 fontsize=6.2,
                                 fontweight="bold",
                                 color="#111111",
-                                bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=col, alpha=0.78, lw=0.5),
+                                bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=col, alpha=0.80, lw=0.5),
                                 zorder=17
                             )
 
-    # 8. North Arrow & Scale Bar
+    # 8. Plot Airstrips (Airplane Silhouette Icon)
+    if len(airstrips_df) > 0:
+        air_s = max(145.0 * (max(marker_scale_pct, 40) / 100.0) * (size_mult ** 1.25), 40.0)
+        ax.scatter(
+            airstrips_df["Lon"],
+            airstrips_df["Lat"],
+            s=air_s,
+            marker=AIRSTRIP_MARKER,
+            c=AIRSTRIP_COLOR,
+            edgecolors="white",
+            linewidths=1.2,
+            alpha=0.98,
+            zorder=18
+        )
+        air_leg_lbl = f"{AIRSTRIP_LEGEND_LABEL} ({len(airstrips_df):,})" if show_legend_counts else AIRSTRIP_LEGEND_LABEL
+        legend_handles.append(
+            mlines.Line2D(
+                [], [],
+                color="white",
+                marker=AIRSTRIP_MARKER,
+                markerfacecolor=AIRSTRIP_COLOR,
+                markeredgecolor="white",
+                markeredgewidth=0.8,
+                markersize=12.0,
+                label=air_leg_lbl
+            )
+        )
+        if label_airstrips_on_map:
+            for _, ar in airstrips_df.iterrows():
+                alon, alat = float(ar["Lon"]), float(ar["Lat"])
+                if min_lon <= alon <= max_lon and min_lat <= alat <= max_lat:
+                    disp_air = f"{ar['Name']} ({ar['Code']})" if str(ar.get("Code", "")).strip() else str(ar["Name"])
+                    ax.annotate(
+                        disp_air,
+                        xy=(alon, alat),
+                        xytext=(4, 4),
+                        textcoords="offset points",
+                        fontsize=7.2 * max(size_mult * 0.78, 0.90),
+                        fontweight="bold",
+                        color="#111827",
+                        bbox=dict(boxstyle="round,pad=0.14", facecolor="white", edgecolor="#111827", alpha=0.88, lw=0.7),
+                        zorder=19
+                    )
+
+    # 9. North Arrow & Scale Bar
     draw_compass_and_bearing(ax, x_frac=0.055, y_frac=0.895)
     draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat)
 
-    # 9. Clean, Unclipped Legend (Lower-Right Open Space or Outside if >18 items)
+    # 10. Clean, Unclipped Legend (Lower-Right Open Space or Outside if >18 items)
     n_leg = len(legend_handles)
     leg_fs = 8.5 * max(size_mult * 0.78, 0.95)
     title_fs = 9.2 * max(size_mult * 0.78, 0.95)
@@ -1308,7 +1445,7 @@ def render_camps_and_fences_map(
         leg = ax.legend(
             handles=legend_handles,
             loc="lower right",
-            ncol=1 if n_leg <= 11 else 2,
+            ncol=1 if n_leg <= 12 else 2,
             title="MAP LEGEND",
             frameon=True,
             facecolor="white",
@@ -1323,20 +1460,20 @@ def render_camps_and_fences_map(
     leg.get_title().set_fontweight("bold")
     leg.set_zorder(22)
 
-    # 10. Title & Mara Elephant Project Source Recognition
+    # 11. Title & Mara Elephant Project Source Recognition
     total_camps = len(camps_df)
+    total_airstrips = len(airstrips_df)
     total_fence_segs = len(fence_features)
     total_fence_km = sum(f.get("length_km", 0.0) for f in fence_features)
 
     title_line_1 = f"{map_title.upper()} — {report_period.upper()}"
+    subtitle_parts = [f"Tented Camps & Lodges: {total_camps:,}"]
+    if total_airstrips > 0:
+        subtitle_parts.append(f"Airstrips: {total_airstrips:,}")
     if fence_features:
-        title_line_2 = (
-            f"Tented Camps & Lodges: {total_camps:,}   |   "
-            f"Fence Segments: {total_fence_segs:,} ({total_fence_km:,.1f} km)   |   "
-            f"Fencing Data Source: Mara Elephant Project (MEP)"
-        )
-    else:
-        title_line_2 = f"Total Tented Camps & Lodges Mapped: {total_camps:,}"
+        subtitle_parts.append(f"Fence Segments: {total_fence_segs:,} ({total_fence_km:,.1f} km)")
+        subtitle_parts.append("Fencing Data Source: Mara Elephant Project (MEP)")
+    title_line_2 = "   |   ".join(subtitle_parts)
 
     ax.set_title(
         title_line_1 + "\n" + title_line_2,
@@ -1376,10 +1513,10 @@ def render_camps_and_fences_map(
 # ==============================================================================
 # STREAMLIT PAGE UI
 # ==============================================================================
-st.title("🏕️ Tented Camps, Lodges & Fencing Map")
+st.title("🏕️ Tented Camps, Lodges, Airstrips & Fencing Map")
 st.markdown(
-    "Large-format cartographic map of **Tented Camps & Lodges** overlaid with **Fencing Shapefiles** "
-    "(sourced from the **Mara Elephant Project**), sized for full-sheet readability and up to **1,000+ facilities**."
+    "Large-format cartographic map of **Tented Camps & Lodges**, **Airstrips**, and **Conservancy Boundaries** "
+    "overlaid with **Fencing Shapefiles** (sourced from the **Mara Elephant Project**)."
 )
 
 col1, col2 = st.columns(2)
@@ -1389,49 +1526,54 @@ with col1:
         type=["csv", "xlsx", "xls"],
         key="camps_facilities_uploader"
     )
+    airstrips_file = st.file_uploader(
+        "2️⃣ Upload Airstrips Locations (CSV / Excel)",
+        type=["csv", "xlsx", "xls"],
+        key="camps_airstrips_uploader"
+    )
     fences_shp_zips = st.file_uploader(
-        "2️⃣ Upload Fences Shapefile (`.zip` — Source: Mara Elephant Project)",
+        "3️⃣ Upload Fences Shapefile (`.zip` — Source: Mara Elephant Project)",
         type=["zip"],
         accept_multiple_files=True,
         key="mep_fences_shp_zip_uploader"
     )
     fences_attr_csv = st.file_uploader(
-        "3️⃣ Optional: Upload Fences Attribute Table CSV (`fenced Mt.csv`)",
+        "4️⃣ Optional: Upload Fences Attribute Table CSV (`fenced Mt.csv`)",
         type=["csv", "xlsx", "xls"],
         key="mep_fences_csv_uploader"
     )
     logo_file = st.file_uploader(
-        "4️⃣ Upload Mara Conservancy / Company Logo (PNG / JPG — Top-Right)",
+        "5️⃣ Upload Mara Conservancy / Company Logo (PNG / JPG — Top-Right)",
         type=["png", "jpg", "jpeg"],
         key="camps_company_logo_uploader"
     )
 
 with col2:
     conservancy_zips = st.file_uploader(
-        "5️⃣ Upload Conservancy / Park Boundary Shapefiles (`.zip` — one or multiple)",
+        "6️⃣ Upload Conservancy / Park Boundary Shapefiles (`.zip` — one or multiple)",
         type=["zip"],
         accept_multiple_files=True,
         key="camps_conservancy_zip_uploader"
     )
     roads_zip = st.file_uploader(
-        "6️⃣ Upload Roads & Tracks Shapefile (`.zip`)",
+        "7️⃣ Upload Roads & Tracks Shapefile (`.zip`)",
         type=["zip"],
         key="camps_roads_zip_uploader"
     )
     rivers_zips = st.file_uploader(
-        "7️⃣ Upload Rivers & Luggas Shapefiles (`.zip`)",
+        "8️⃣ Upload Rivers & Luggas Shapefiles (`.zip`)",
         type=["zip"],
         accept_multiple_files=True,
         key="camps_rivers_zip_uploader"
     )
     ranger_posts_zip = st.file_uploader(
-        "8️⃣ Upload Ranger Posts / Gates Shapefile (`.zip`)",
+        "9️⃣ Upload Ranger Posts / Gates Shapefile (`.zip`)",
         type=["zip"],
         key="camps_ranger_posts_zip_uploader"
     )
 
 with st.sidebar:
-    st.subheader("Paper Size & Basemap Layer")
+    st.subheader("Paper Size & Bright Basemap Layer")
     paper_size_label = st.selectbox(
         "Map Sheet / Paper Size",
         options=list(PAPER_SIZES_INCHES.keys()),
@@ -1449,7 +1591,7 @@ with st.sidebar:
     zoom_level = st.slider("Map Tile Detail (Zoom)", min_value=9, max_value=13, value=11, key="camps_topo_zoom")
     logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=60, step=5, key="camps_logo_size_pct")
     marker_scale_pct = st.slider(
-        "Tented Camps & Lodges Tent Icon Size (%)",
+        "Tented Camps & Airstrips Icon Size (%)",
         min_value=50,
         max_value=200,
         value=125,
@@ -1474,6 +1616,11 @@ with st.sidebar:
         value=True,
         key="camps_focus_extent_chk"
     )
+    label_airstrips_on_map = st.checkbox(
+        "Show Airstrip Name Labels on Map",
+        value=True,
+        key="camps_label_airstrips_chk"
+    )
     label_camps_on_map = st.checkbox(
         "Show Camp / Facility Name Labels on Map",
         value=False,
@@ -1485,7 +1632,7 @@ with st.sidebar:
         key="camps_names_in_legend_chk"
     )
     dedup_camps = st.checkbox(
-        "Remove Exact Duplicate Camp Coordinates",
+        "Remove Exact Duplicate Coordinates",
         value=True,
         key="camps_dedup_chk"
     )
@@ -1507,11 +1654,19 @@ with st.sidebar:
     )
 
     st.divider()
+    st.subheader("Conservancies & Overlays")
+    area_fill_opacity = st.slider(
+        "Conservancy Polygon Fill Opacity (% — Non-Opaque)",
+        min_value=5,
+        max_value=45,
+        value=18,
+        step=2,
+        key="camps_area_alpha"
+    )
+    show_poly_labels = st.checkbox("Label Conservancy / Park Areas", value=True, key="camps_poly_lbl")
     roads_legend_name = st.text_input("Roads Legend Label", value="Roads & Tracks", key="camps_roads_leg")
     rivers_legend_name = st.text_input("Rivers & Luggas Legend Label", value="Rivers & Luggas", key="camps_rivers_leg")
     ranger_legend_name = st.text_input("Ranger Posts Legend Label", value="Ranger Posts", key="camps_ranger_leg")
-    area_fill_opacity = st.slider("Boundary Shading Opacity (%)", min_value=0, max_value=55, value=20, step=2, key="camps_area_alpha")
-    show_poly_labels = st.checkbox("Label Conservancy / Park Areas", value=True, key="camps_poly_lbl")
     show_post_labels = st.checkbox("Label Ranger Posts", value=False, key="camps_post_lbl")
 
 
@@ -1539,6 +1694,21 @@ if camps_file is not None:
     )
     if selected_fac_types:
         camps_df = camps_df[camps_df["Facility_Type"].isin(selected_fac_types)].reset_index(drop=True)
+
+# ------------------------------------------------------------------------------
+# Parse Airstrips Data
+# ------------------------------------------------------------------------------
+airstrips_df = pd.DataFrame()
+if airstrips_file is not None:
+    if airstrips_file.name.lower().endswith((".xlsx", ".xls")):
+        raw_air = pd.read_excel(airstrips_file)
+    else:
+        raw_air = pd.read_csv(airstrips_file)
+    try:
+        airstrips_df = parse_airstrips_dataframe(raw_air, deduplicate=dedup_camps)
+    except ValueError as err:
+        st.error(str(err))
+        st.stop()
 
 # ------------------------------------------------------------------------------
 # Parse Mara Elephant Project (MEP) Fencing Shapefiles (.zip) & Optional CSV
@@ -1580,16 +1750,16 @@ if fences_attr_csv is not None:
     if not fence_features:
         st.warning(
             "⚠️ You uploaded the Fences attribute CSV (`fenced Mt.csv`), which contains fence types/lengths "
-            "without line coordinates. To draw the fence lines on the map, also upload the Fences shapefile **`.zip`** in box **2️⃣**."
+            "without line coordinates. To draw the fence lines on the map, also upload the Fences shapefile **`.zip`** in box **3️⃣**."
         )
 
 # ------------------------------------------------------------------------------
 # Display Summary Tables & KPIs
 # ------------------------------------------------------------------------------
-if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0:
+if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Tented Camps & Lodges", f"{len(camps_df):,}")
-    k2.metric("Source Sub-Types Included", f"{camps_df['Facility_Type'].nunique() if len(camps_df) > 0 else 0}")
+    k2.metric("Airstrips", f"{len(airstrips_df):,}")
 
     active_fence_df = fence_shp_summary_df if len(fence_shp_summary_df) > 0 else fence_csv_summary_df
     len_col_name = "Length (km)" if "Length (km)" in active_fence_df.columns else "Est. Length (km)"
@@ -1611,6 +1781,14 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
                 hide_index=True
             )
 
+    if len(airstrips_df) > 0:
+        with st.expander(f"✈️ View Airstrips Directory ({len(airstrips_df):,} airstrips)", expanded=False):
+            st.dataframe(
+                airstrips_df[["Name", "Code", "Surface", "Lat", "Lon"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
     if len(active_fence_df) > 0:
         st.subheader("🐘 Fencing Breakdown (Data Source: Mara Elephant Project)")
         f_agg = (
@@ -1622,14 +1800,14 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
         f_agg["Total_Length_km"] = f_agg["Total_Length_km"].round(2)
         st.dataframe(f_agg, use_container_width=True, hide_index=True)
 
-    # Load optional boundary/infrastructure layers
+    # Load optional boundary/infrastructure layers with distinct non-opaque colors
     conservancies_loaded = []
-    boundary_palette = ["#1B4F72", "#117864", "#7D3C98", "#B7950B", "#922B21"]
     if conservancy_zips:
+        st.markdown("**Conservancy / Park Boundary Polygon Colors (Distinct & Translucent):**")
         name_cols = st.columns(min(len(conservancy_zips), 3))
         for idx, zfile in enumerate(conservancy_zips):
             default_label = os.path.splitext(zfile.name)[0].replace("_", " ").title()
-            default_col = boundary_palette[idx % len(boundary_palette)]
+            default_col = CONSERVANCY_DISTINCT_PALETTE[idx % len(CONSERVANCY_DISTINCT_PALETTE)]
             with name_cols[idx % len(name_cols)]:
                 custom_name = st.text_input(
                     f"Boundary {idx + 1} Name ({zfile.name})",
@@ -1637,7 +1815,7 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
                     key=f"camps_cons_name_{idx}_{zfile.name}"
                 )
                 chosen_col = st.color_picker(
-                    f"Boundary {idx + 1} Color",
+                    f"Boundary {idx + 1} Distinct Color",
                     value=default_col,
                     key=f"camps_cons_col_{idx}_{zfile.name}"
                 )
@@ -1685,12 +1863,13 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
     st.divider()
     safe_period = report_period.replace(" ", "_")
 
-    if st.button("🗺️ Generate Large-Format Camps, Lodges & Fencing Map", type="primary", key="btn_gen_camps_fences_map"):
-        with st.spinner("Rendering high-resolution large-format map..."):
+    if st.button("🗺️ Generate Large-Format Camps, Airstrips & Fencing Map", type="primary", key="btn_gen_camps_fences_map"):
+        with st.spinner("Rendering bright high-resolution large-format map..."):
             try:
                 map_png = render_camps_and_fences_map(
                     map_title=map_title,
                     camps_df=camps_df,
+                    airstrips_df=airstrips_df,
                     fence_features=fence_features,
                     fence_breakdown_mode=fence_breakdown_mode,
                     focus_on_facilities_extent=focus_on_facilities_extent,
@@ -1711,6 +1890,7 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
                     zoom_level=zoom_level,
                     include_camp_names_in_legend=include_camp_names_in_legend,
                     label_camps_on_map=label_camps_on_map,
+                    label_airstrips_on_map=label_airstrips_on_map,
                     label_conservancies_on_map=show_poly_labels,
                     logo_scale_pct=logo_scale_pct,
                     area_fill_alpha=area_fill_opacity / 100.0,
@@ -1730,28 +1910,30 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
             zf.writestr(f"Tented_Camps_Lodges_Fences_Map_{saved_per}.png", saved_png)
             if len(camps_df) > 0:
                 zf.writestr(f"Tented_Camps_Lodges_Directory_{saved_per}.csv", camps_df.to_csv(index=False))
+            if len(airstrips_df) > 0:
+                zf.writestr(f"Airstrips_Directory_{saved_per}.csv", airstrips_df.to_csv(index=False))
             if len(active_fence_df) > 0:
                 zf.writestr(f"Fencing_Breakdown_MEP_{saved_per}.csv", active_fence_df.to_csv(index=False))
         zip_buf.seek(0)
 
         st.download_button(
-            label="📦 Download High-Res Map + Directory + Fence Summary (.ZIP)",
+            label="📦 Download High-Res Map + Directories + Fence Summary (.ZIP)",
             data=zip_buf.getvalue(),
-            file_name=f"Mara_Tented_Camps_Lodges_Fences_{saved_per}.zip",
+            file_name=f"Mara_Tented_Camps_Lodges_Airstrips_Fences_{saved_per}.zip",
             mime="application/zip",
             key="dl_camps_fences_zip"
         )
 
-        st.image(saved_png, caption=f"Tented Camps, Lodges & Fencing Map ({report_period})", use_container_width=True)
+        st.image(saved_png, caption=f"Tented Camps, Lodges, Airstrips & Fencing Map ({report_period})", use_container_width=True)
         st.download_button(
             label="📥 Download High-Res Map Image (.png)",
             data=saved_png,
-            file_name=f"Tented_Camps_Lodges_Fences_Map_{saved_per}.png",
+            file_name=f"Tented_Camps_Lodges_Airstrips_Fences_Map_{saved_per}.png",
             mime="image/png",
             key="dl_camps_fences_png"
         )
 else:
     st.info(
-        "👆 Upload your **Camps & Facilities CSV** and/or your "
+        "👆 Upload your **Camps & Facilities CSV**, **Airstrips CSV**, and/or your "
         "**Fences Shapefile (`.zip`)** above to generate the map."
     )
