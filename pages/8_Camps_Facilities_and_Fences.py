@@ -518,7 +518,7 @@ def fetch_opentopomap_basemap(min_lon: float, min_lat: float, max_lon: float, ma
     x_min, y_max = deg2num(min_lat, min_lon, zoom)
     x_max, y_min = deg2num(max_lat, max_lon, zoom)
 
-    while (x_max - x_min + 1) * (y_max - y_min + 1) > 49 and zoom > 7:
+    while (x_max - x_min + 1) * (y_max - y_min + 1) > 64 and zoom > 7:
         zoom -= 1
         x_min, y_max = deg2num(min_lat, min_lon, zoom)
         x_max, y_min = deg2num(max_lat, max_lon, zoom)
@@ -547,8 +547,8 @@ def fetch_opentopomap_basemap(min_lon: float, min_lat: float, max_lon: float, ma
 # ==============================================================================
 # 4. CARTOGRAPHIC HELPERS: NORTH ARROW + BEARING ROSE, SCALE BAR, LOGO
 # ==============================================================================
-def draw_compass_and_bearing(ax, x_frac=0.075, y_frac=0.88):
-    ax_inset = ax.inset_axes([x_frac - 0.055, y_frac - 0.075, 0.11, 0.15], transform=ax.transAxes)
+def draw_compass_and_bearing(ax, x_frac=0.06, y_frac=0.89):
+    ax_inset = ax.inset_axes([x_frac - 0.045, y_frac - 0.065, 0.09, 0.13], transform=ax.transAxes)
     ax_inset.set_xlim(-1.45, 1.45)
     ax_inset.set_ylim(-1.45, 1.45)
     ax_inset.set_aspect("equal")
@@ -587,26 +587,26 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
     km_per_deg_lon = 111.32 * math.cos(math.radians(mid_lat))
     map_width_km = (max_lon - min_lon) * km_per_deg_lon
 
-    target_km = map_width_km * 0.22
+    target_km = map_width_km * 0.20
     nice_steps = [1, 2, 5, 10, 15, 20, 25, 30, 50, 100]
     scale_km = min(nice_steps, key=lambda s: abs(s - target_km))
     bar_deg = scale_km / max(km_per_deg_lon, 1e-6)
 
-    x0 = min_lon + (max_lon - min_lon) * 0.04
-    y0 = min_lat + (max_lat - min_lat) * 0.065
-    h = (max_lat - min_lat) * 0.013
+    x0 = min_lon + (max_lon - min_lon) * 0.03
+    y0 = min_lat + (max_lat - min_lat) * 0.055
+    h = (max_lat - min_lat) * 0.011
 
-    pad_x = (max_lon - min_lon) * 0.015
-    pad_y = (max_lat - min_lat) * 0.016
+    pad_x = (max_lon - min_lon) * 0.012
+    pad_y = (max_lat - min_lat) * 0.014
     box = mpatches.FancyBboxPatch(
         (x0 - pad_x, y0 - pad_y),
         bar_deg + 2 * pad_x,
-        h + 3.0 * pad_y,
+        h + 2.8 * pad_y,
         boxstyle="round,pad=0.002",
         facecolor="white",
         edgecolor="#444444",
         linewidth=0.8,
-        alpha=0.9,
+        alpha=0.92,
         zorder=18
     )
     ax.add_patch(box)
@@ -615,9 +615,9 @@ def draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat):
     ax.add_patch(mpatches.Rectangle((x0, y0), half, h, facecolor="#111111", edgecolor="#111111", linewidth=0.8, zorder=19))
     ax.add_patch(mpatches.Rectangle((x0 + half, y0), half, h, facecolor="white", edgecolor="#111111", linewidth=0.8, zorder=19))
 
-    ax.text(x0, y0 + h * 1.45, "0", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
-    ax.text(x0 + half, y0 + h * 1.45, f"{scale_km / 2:g}", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
-    ax.text(x0 + bar_deg, y0 + h * 1.45, f"{scale_km:g} km", ha="center", va="bottom", fontsize=7.5, fontweight="bold", color="#111111", zorder=20)
+    ax.text(x0, y0 + h * 1.45, "0", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color="#111111", zorder=20)
+    ax.text(x0 + half, y0 + h * 1.45, f"{scale_km / 2:g}", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color="#111111", zorder=20)
+    ax.text(x0 + bar_deg, y0 + h * 1.45, f"{scale_km:g} km", ha="center", va="bottom", fontsize=7.8, fontweight="bold", color="#111111", zorder=20)
 
 
 def _find_repo_logo_bytes():
@@ -662,15 +662,15 @@ def add_top_right_logo(ax, logo_bytes, logo_scale_pct: int = 55):
         pil_logo = pil_logo.crop((x0, y0, x1, y1))
 
     factor = max(logo_scale_pct, 20) / 100.0
-    target_h = max(int(68 * factor), 22)
+    target_h = max(int(76 * factor), 24)
     scale = target_h / max(float(pil_logo.height), 1.0)
-    target_w = min(max(int(pil_logo.width * scale), 26), 160)
+    target_w = min(max(int(pil_logo.width * scale), 28), 180)
     pil_resized = pil_logo.resize((target_w, target_h), Image.LANCZOS)
 
-    oi = OffsetImage(np.asarray(pil_resized), zoom=0.42)
+    oi = OffsetImage(np.asarray(pil_resized), zoom=0.45)
     ab = AnnotationBbox(
         oi,
-        (0.990, 0.990),
+        (0.992, 0.992),
         xycoords="axes fraction",
         box_alignment=(1.0, 1.0),
         frameon=True,
@@ -688,68 +688,79 @@ def add_top_right_logo(ax, logo_bytes, logo_scale_pct: int = 55):
 
 def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> float:
     """
-    Automatically scales point marker area (`s` in points^2) so 50 facilities remain
-    crisp while 1,000+ facilities stay clean, legible, and non-overlapping.
+    Automatically scales point marker area (`s` in points^2) so symbols remain bold and
+    distinct on large-format paper while preventing crowding up to 1,000+ facilities.
     """
     if num_points <= 40:
-        base_s = 72.0
-    elif num_points <= 100:
-        base_s = 50.0
-    elif num_points <= 250:
-        base_s = 30.0
-    elif num_points <= 500:
-        base_s = 19.0
-    elif num_points <= 900:
-        base_s = 13.0
+        base_s = 105.0
+    elif num_points <= 120:
+        base_s = 78.0
+    elif num_points <= 300:
+        base_s = 54.0
+    elif num_points <= 600:
+        base_s = 36.0
+    elif num_points <= 950:
+        base_s = 25.0
     else:
-        base_s = 9.5
-    return max(base_s * (max(user_scale_pct, 25) / 100.0), 5.0)
+        base_s = 18.0
+    return max(base_s * (max(user_scale_pct, 30) / 100.0), 8.0)
 
 
 # ==============================================================================
-# 5. RENDER CAMPS, FACILITIES & MEP FENCING MAP
+# 5. RENDER CAMPS, FACILITIES & MEP FENCING MAP (LARGE A2/A3 LANDSCAPE SHEET)
 # ==============================================================================
+# High-contrast, standout color and shape for unified "Tented Camps & Lodges"
+UNIFIED_FACILITY_COLOR = "#0057FF"     # Vivid cobalt blue — stands out sharply against red/orange fences & green/tan terrain
+UNIFIED_FACILITY_MARKER = "o"
+UNIFIED_FACILITY_LABEL = "Tented Camps & Lodges"
+
 FACILITY_STYLE_PALETTE = {
-    "Tented Camp": ("#D92323", "o"),
+    "Tented Camp": ("#0057FF", "o"),
     "Lodge": ("#7D3C98", "s"),
     "Eco-Lodge": ("#117864", "D"),
-    "Eco Camp": ("#E67E22", "P"),
+    "Eco Camp": ("#008B8B", "P"),
     "Ranger Post": ("#1E8449", "^"),
     "Gate": ("#1F4E78", "v"),
-    "Cottage": ("#D4AC0D", "v"),
-    "Villa": ("#C0392B", "h"),
+    "Cottage": ("#8E44AD", "v"),
+    "Villa": ("#2E4053", "h"),
     "Airstrip": ("#2C3E50", "h"),
 }
 FALLBACK_FACILITY_STYLES = [
-    ("#C0392B", "o"), ("#8E44AD", "s"), ("#16A085", "D"),
-    ("#D35400", "P"), ("#2980B9", "^"), ("#B7950B", "v"),
+    ("#0057FF", "o"), ("#8E44AD", "s"), ("#16A085", "D"),
+    ("#2980B9", "P"), ("#1F618D", "^"), ("#6C3483", "v"),
 ]
 
-# Clean legend styles for fence categories (no "MEP Fence:" prefix in legend)
+# Clean legend styles for fence categories (no segment counts, no "MEP Fence:" prefix)
 FENCE_BROAD_STYLES = {
-    "Electric Fence": ("#E60039", "-", 1.7),
-    "Wire Fence": ("#FF8C00", "--", 1.5),
-    "Cactus / Live Fence": ("#2E8B57", "-.", 1.5),
-    "Defenced Fence": ("#6C3483", ":", 1.5),
-    "Stone Wall / Fence": ("#5D6D7E", "-", 1.5),
-    "Woodpost Fence": ("#8E5B32", "--", 1.4),
-    "Other Fence": ("#7F8C8D", ":", 1.3),
+    "Electric Fence": ("#E60039", "-", 2.1),
+    "Wire Fence": ("#FF8C00", "--", 1.9),
+    "Cactus / Live Fence": ("#2E8B57", "-.", 1.8),
+    "Defenced Fence": ("#6C3483", ":", 1.8),
+    "Stone Wall / Fence": ("#5D6D7E", "-", 1.8),
+    "Woodpost Fence": ("#8E5B32", "--", 1.7),
+    "Other Fence": ("#7F8C8D", ":", 1.5),
 }
 
 FENCE_DETAILED_STYLES = {
-    "Electric Fence (9-Strand)": ("#8E0038", "-", 2.0),
-    "Electric Fence (7-Strand)": ("#D90429", "-", 1.8),
-    "Electric Fence (6-Strand)": ("#FF3366", "-", 1.7),
-    "Electric Fence (Unspecified Strands)": ("#E60073", (0, (5, 2)), 1.6),
-    "Wire Fence (5-Strand)": ("#B9770E", "--", 1.7),
-    "Wire Fence (4-Strand)": ("#D68910", "--", 1.6),
-    "Wire Fence (3-Strand)": ("#F39C12", ":", 1.6),
-    "Wire Fence": ("#E67E22", "--", 1.5),
-    "Cactus / Live Fence": ("#2E8B57", "-.", 1.5),
-    "Defenced Fence": ("#6C3483", ":", 1.5),
-    "Stone Wall / Fence": ("#5D6D7E", "-", 1.5),
-    "Woodpost Fence": ("#8E5B32", "--", 1.4),
-    "Other Fence": ("#7F8C8D", ":", 1.3),
+    "Electric Fence (9-Strand)": ("#8E0038", "-", 2.4),
+    "Electric Fence (7-Strand)": ("#D90429", "-", 2.2),
+    "Electric Fence (6-Strand)": ("#FF3366", "-", 2.0),
+    "Electric Fence (Unspecified Strands)": ("#E60073", (0, (5, 2)), 1.9),
+    "Wire Fence (5-Strand)": ("#B9770E", "--", 2.0),
+    "Wire Fence (4-Strand)": ("#D68910", "--", 1.9),
+    "Wire Fence (3-Strand)": ("#F39C12", ":", 1.9),
+    "Wire Fence": ("#E67E22", "--", 1.9),
+    "Cactus / Live Fence": ("#2E8B57", "-.", 1.8),
+    "Defenced Fence": ("#6C3483", ":", 1.8),
+    "Stone Wall / Fence": ("#5D6D7E", "-", 1.8),
+    "Woodpost Fence": ("#8E5B32", "--", 1.7),
+    "Other Fence": ("#7F8C8D", ":", 1.5),
+}
+
+PAPER_SIZES_INCHES = {
+    "Large Poster / A2 Landscape (23.4 × 16.5 in) — Best Visibility": (23.4, 16.5),
+    "Executive Wall Map / A3 Landscape (16.5 × 11.7 in)": (16.5, 11.7),
+    "Standard Report / A4 Landscape (12.4 × 8.8 in)": (12.4, 8.8),
 }
 
 
@@ -759,6 +770,9 @@ def render_camps_and_fences_map(
     fence_features: list[dict],
     fence_breakdown_mode: str,
     focus_on_facilities_extent: bool = True,
+    group_all_facilities_as_one: bool = True,
+    show_legend_counts: bool = False,
+    paper_size_label: str = "Large Poster / A2 Landscape (23.4 × 16.5 in) — Best Visibility",
     conservancies: list = None,
     rivers_features: list = None,
     rivers_label: str = "Rivers & Luggas",
@@ -773,14 +787,14 @@ def render_camps_and_fences_map(
     include_camp_names_in_legend: bool = False,
     label_camps_on_map: bool = False,
     label_conservancies_on_map: bool = True,
-    logo_scale_pct: int = 55,
+    logo_scale_pct: int = 60,
     area_fill_alpha: float = 0.20,
-    marker_scale_pct: int = 100,
+    marker_scale_pct: int = 115,
 ) -> bytes:
     """
-    Renders a clean cartographic map of Camps & Facilities overlaid with fencing data
-    (sourced from Mara Elephant Project), using clean legend names ("Electric Fence",
-    "Wire Fence") and density-adaptive symbol sizing built to scale cleanly to 1,000+ facilities.
+    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges overlaid
+    with fencing data (sourced from Mara Elephant Project), with external/unclipped legend
+    placement, clean legend names without numbers, and standout facility symbols.
     """
     conservancies = conservancies or []
     rivers_features = rivers_features or []
@@ -800,7 +814,6 @@ def render_camps_and_fences_map(
         if b is not None:
             bounds_list.append(b)
 
-    # Only expand map extent to the full national fence shapefile if requested or if no camps/boundaries are loaded
     if fence_features and (not focus_on_facilities_extent or not bounds_list):
         fb = get_features_bounds(fence_features)
         if fb is not None:
@@ -814,14 +827,15 @@ def render_camps_and_fences_map(
     else:
         min_lon, min_lat, max_lon, max_lat = 34.82, -1.70, 35.42, -1.20
 
+    # Generous 18% margin around all facilities/boundaries so nothing at the edges ever gets cut off
     lon_span = max(max_lon - min_lon, 0.05)
     lat_span = max(max_lat - min_lat, 0.05)
-    min_lon -= lon_span * 0.12
-    max_lon += lon_span * 0.12
-    min_lat -= lat_span * 0.12
-    max_lat += lat_span * 0.12
+    min_lon -= lon_span * 0.18
+    max_lon += lon_span * 0.18
+    min_lat -= lat_span * 0.18
+    max_lat += lat_span * 0.18
 
-    fig_w, fig_h = 12.2, 8.8
+    fig_w, fig_h = PAPER_SIZES_INCHES.get(paper_size_label, (23.4, 16.5))
     target_aspect = fig_w / fig_h
     mid_lat_rad = math.radians((min_lat + max_lat) / 2.0)
     cos_lat = max(math.cos(mid_lat_rad), 0.1)
@@ -843,6 +857,8 @@ def render_camps_and_fences_map(
         min_lat = lat_center - desired_lat_span / 2.0
         max_lat = lat_center + desired_lat_span / 2.0
 
+    # Scale visual elements proportionally to paper size
+    size_mult = fig_w / 14.0
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=220)
 
     # 1. OpenTopoMap Basemap
@@ -876,7 +892,7 @@ def render_camps_and_fences_map(
                         zorder=3
                     )
                     ax.add_patch(poly)
-                ax.plot(xs, ys, color=edge_color, linewidth=2.0, linestyle=lstyle, zorder=5 + idx)
+                ax.plot(xs, ys, color=edge_color, linewidth=2.2 * size_mult * 0.85, linestyle=lstyle, zorder=5 + idx)
 
             if label_conservancies_on_map:
                 cen = get_feature_centroid(feat)
@@ -885,12 +901,12 @@ def render_camps_and_fences_map(
                         cen[0],
                         cen[1],
                         str(feat["name"]).upper(),
-                        fontsize=7.6,
+                        fontsize=8.5 * size_mult * 0.85,
                         fontweight="bold",
                         color=edge_color,
                         ha="center",
                         va="center",
-                        bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor=edge_color, alpha=0.78, lw=0.8),
+                        bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor=edge_color, alpha=0.80, lw=0.9),
                         zorder=9
                     )
 
@@ -900,7 +916,7 @@ def render_camps_and_fences_map(
                 facecolor=edge_color if area_fill_alpha > 0 else "none",
                 edgecolor=edge_color,
                 alpha=min(area_fill_alpha + 0.12, 0.65) if area_fill_alpha > 0 else 1.0,
-                linewidth=1.8,
+                linewidth=2.0,
                 linestyle=lstyle,
                 label=disp_legend_name
             )
@@ -912,9 +928,9 @@ def render_camps_and_fences_map(
             for ring in feat["parts"]:
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                ax.plot(xs, ys, color="#5C4033", linewidth=0.95, linestyle="-", alpha=0.72, zorder=6)
+                ax.plot(xs, ys, color="#5C4033", linewidth=1.1 * size_mult * 0.8, linestyle="-", alpha=0.72, zorder=6)
         legend_handles.append(
-            mlines.Line2D([], [], color="#5C4033", linewidth=1.4, linestyle="-", label=roads_label)
+            mlines.Line2D([], [], color="#5C4033", linewidth=1.8, linestyle="-", label=roads_label)
         )
 
     # 4. Rivers & Luggas Overlay
@@ -923,12 +939,12 @@ def render_camps_and_fences_map(
             for ring in feat["parts"]:
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                ax.plot(xs, ys, color="#0066CC", linewidth=1.15, linestyle="-", alpha=0.80, zorder=7)
+                ax.plot(xs, ys, color="#0066CC", linewidth=1.3 * size_mult * 0.8, linestyle="-", alpha=0.80, zorder=7)
         legend_handles.append(
-            mlines.Line2D([], [], color="#0066CC", linewidth=1.5, label=rivers_label)
+            mlines.Line2D([], [], color="#0066CC", linewidth=1.9, label=rivers_label)
         )
 
-    # 5. Fencing Layer (Clean Legend Labels: "Electric Fence", "Wire Fence", etc.)
+    # 5. Fencing Layer (Clean Legend Labels: "Electric Fence", "Wire Fence" — NO numbers unless requested)
     if fence_features:
         use_detailed = fence_breakdown_mode.startswith("Detailed")
         key_field = "fence_detail" if use_detailed else "fence_broad"
@@ -951,24 +967,25 @@ def render_camps_and_fences_map(
             f_list = grouped_fences[f_cat]
             col, lstyle, lw = style_map.get(
                 f_cat,
-                ("#D90429" if "electric" in f_cat.lower() else "#E67E22", "-" if "electric" in f_cat.lower() else "--", 1.6)
+                ("#D90429" if "electric" in f_cat.lower() else "#E67E22", "-" if "electric" in f_cat.lower() else "--", 1.8)
             )
+            scaled_lw = lw * max(size_mult * 0.82, 1.0)
             total_km = sum(f.get("length_km", 0.0) for f in f_list)
 
             for feat in f_list:
                 for ring in feat["parts"]:
                     xs = [p[0] for p in ring]
                     ys = [p[1] for p in ring]
-                    ax.plot(xs, ys, color=col, linewidth=lw, linestyle=lstyle, alpha=0.88, zorder=10)
+                    ax.plot(xs, ys, color=col, linewidth=scaled_lw, linestyle=lstyle, alpha=0.88, zorder=10)
 
-            km_suffix = f" ({total_km:,.1f} km)" if total_km > 0.05 else ""
+            leg_lbl = f"{f_cat} ({total_km:,.1f} km)" if (show_legend_counts and total_km > 0.05) else f_cat
             legend_handles.append(
                 mlines.Line2D(
                     [], [],
                     color=col,
-                    linewidth=lw + 0.4,
+                    linewidth=2.6,
                     linestyle=lstyle,
-                    label=f"{f_cat}{km_suffix}"
+                    label=leg_lbl
                 )
             )
 
@@ -986,25 +1003,25 @@ def render_camps_and_fences_map(
                         xy=(cen[0], cen[1]),
                         xytext=(3, 3),
                         textcoords="offset points",
-                        fontsize=6.5,
+                        fontsize=7.2,
                         fontweight="bold",
                         color="#145A32",
-                        bbox=dict(boxstyle="round,pad=0.12", facecolor="white", edgecolor="#1E8449", alpha=0.80, lw=0.5),
+                        bbox=dict(boxstyle="round,pad=0.14", facecolor="white", edgecolor="#1E8449", alpha=0.82, lw=0.6),
                         zorder=13
                     )
         if pts_x:
-            ax.scatter(pts_x, pts_y, s=48, marker="^", c="#1E8449", edgecolors="white", linewidths=0.8, zorder=12)
+            ax.scatter(pts_x, pts_y, s=65 * size_mult, marker="^", c="#1E8449", edgecolors="white", linewidths=1.0, zorder=12)
         legend_handles.append(
-            mlines.Line2D([], [], color="white", marker="^", markerfacecolor="#1E8449", markeredgecolor="white", markersize=7.5, label=ranger_posts_label)
+            mlines.Line2D([], [], color="white", marker="^", markerfacecolor="#1E8449", markeredgecolor="white", markersize=8.5, label=ranger_posts_label)
         )
 
-    # 7. Plot Camps & Facilities with Density-Adaptive Sizing (scales cleanly to 1,000+ facilities)
+    # 7. Plot Tented Camps & Lodges (Unified Single Category or Breakdown)
     if len(camps_df) > 0:
         work_df = camps_df.copy().reset_index(drop=True)
         n_total_pts = len(work_df)
-        adaptive_s = compute_adaptive_marker_size(n_total_pts, user_scale_pct=marker_scale_pct)
-        edge_lw = 0.35 if n_total_pts >= 400 else (0.55 if n_total_pts >= 150 else 0.85)
-        jitter_rad = 0.00035 if n_total_pts >= 250 else 0.00085
+        adaptive_s = compute_adaptive_marker_size(n_total_pts, user_scale_pct=marker_scale_pct) * (size_mult ** 1.25)
+        edge_lw = 0.65 if n_total_pts >= 400 else (0.95 if n_total_pts >= 150 else 1.25)
+        jitter_rad = 0.00035 if n_total_pts >= 250 else 0.00080
 
         coord_counts = {}
         plot_lons, plot_lats = [], []
@@ -1024,494 +1041,79 @@ def render_camps_and_fences_map(
         work_df["_plot_lon"] = plot_lons
         work_df["_plot_lat"] = plot_lats
 
-        fac_types = work_df["Facility_Type"].value_counts().index.tolist()
-        for t_idx, f_type in enumerate(fac_types):
-            sub = work_df[work_df["Facility_Type"] == f_type]
-            col, marker_sym = FACILITY_STYLE_PALETTE.get(
-                f_type, FALLBACK_FACILITY_STYLES[t_idx % len(FALLBACK_FACILITY_STYLES)]
-            )
+        if group_all_facilities_as_one:
+            # Plot ALL camps & lodges together with one standout high-contrast symbol & color
             ax.scatter(
-                sub["_plot_lon"],
-                sub["_plot_lat"],
+                work_df["_plot_lon"],
+                work_df["_plot_lat"],
                 s=adaptive_s,
-                marker=marker_sym,
-                c=col,
+                marker=UNIFIED_FACILITY_MARKER,
+                c=UNIFIED_FACILITY_COLOR,
                 edgecolors="white",
                 linewidths=edge_lw,
-                alpha=0.92,
-                zorder=15
+                alpha=0.95,
+                zorder=16
             )
-
+            fac_leg_lbl = f"{UNIFIED_FACILITY_LABEL} ({len(work_df):,})" if show_legend_counts else UNIFIED_FACILITY_LABEL
             legend_handles.append(
                 mlines.Line2D(
                     [], [],
                     color="white",
-                    marker=marker_sym,
-                    markerfacecolor=col,
+                    marker=UNIFIED_FACILITY_MARKER,
+                    markerfacecolor=UNIFIED_FACILITY_COLOR,
                     markeredgecolor="white",
-                    markeredgewidth=0.8,
-                    markersize=7.2,
-                    label=f"{f_type} ({len(sub):,})"
+                    markeredgewidth=1.0,
+                    markersize=9.5,
+                    label=fac_leg_lbl
                 )
             )
-
-            # Optional individual facility names in legend (off by default)
             if include_camp_names_in_legend:
-                for _, sr in sub.iterrows():
+                for _, sr in work_df.iterrows():
                     legend_handles.append(
                         mlines.Line2D(
                             [], [],
                             color="white",
-                            marker=marker_sym,
-                            markerfacecolor=col,
+                            marker=UNIFIED_FACILITY_MARKER,
+                            markerfacecolor=UNIFIED_FACILITY_COLOR,
                             markeredgecolor="white",
-                            markersize=5.5,
+                            markersize=6.0,
                             label=f"  • {sr['Name']}"
                         )
                     )
-
-            # Optional on-map labels (off by default so 200-1,000+ facilities never clutter)
             if label_camps_on_map:
-                for _, sr in sub.iterrows():
+                for _, sr in work_df.iterrows():
                     if min_lon <= sr["_plot_lon"] <= max_lon and min_lat <= sr["_plot_lat"] <= max_lat:
                         ax.annotate(
                             str(sr["Name"]),
                             xy=(sr["_plot_lon"], sr["_plot_lat"]),
                             xytext=(3, 2),
                             textcoords="offset points",
-                            fontsize=5.6,
+                            fontsize=6.2,
                             fontweight="bold",
                             color="#111111",
-                            bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=col, alpha=0.75, lw=0.5),
-                            zorder=16
+                            bbox=dict(boxstyle="round,pad=0.08", facecolor="white", edgecolor=UNIFIED_FACILITY_COLOR, alpha=0.78, lw=0.5),
+                            zorder=17
                         )
-
-    # 8. North Arrow & Scale Bar
-    draw_compass_and_bearing(ax, x_frac=0.075, y_frac=0.88)
-    draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat)
-
-    # 9. Clean Legend
-    n_leg = len(legend_handles)
-    if n_leg > 32:
-        ncol_leg = 3
-        leg_fs = 5.8
-    elif n_leg > 13:
-        ncol_leg = 2
-        leg_fs = 6.8
-    else:
-        ncol_leg = 1
-        leg_fs = 7.4
-
-    leg = ax.legend(
-        handles=legend_handles,
-        loc="lower right",
-        ncol=ncol_leg,
-        title="FACILITIES, FENCES & MAP LAYERS",
-        frameon=True,
-        facecolor="white",
-        edgecolor="#1F4E78",
-        framealpha=0.94,
-        fontsize=leg_fs,
-        title_fontsize=8.0,
-        columnspacing=0.8,
-        handletextpad=0.45,
-    )
-    leg.get_title().set_fontweight("bold")
-    leg.set_zorder(22)
-
-    # 10. Title & Mara Elephant Project Source Recognition
-    total_camps = len(camps_df)
-    total_fence_segs = len(fence_features)
-    total_fence_km = sum(f.get("length_km", 0.0) for f in fence_features)
-
-    title_line_1 = f"{map_title.upper()} — {report_period.upper()}"
-    if fence_features:
-        title_line_2 = (
-            f"Camps & Facilities: {total_camps:,}   |   "
-            f"Fence Segments: {total_fence_segs:,} ({total_fence_km:,.1f} km)   |   "
-            f"Fencing Data Source: Mara Elephant Project (MEP)"
-        )
-    else:
-        title_line_2 = f"Total Camps & Facilities Mapped: {total_camps:,}"
-
-    ax.set_title(
-        title_line_1 + "\n" + title_line_2,
-        fontsize=11.2,
-        fontweight="bold",
-        color="#1F4E78",
-        pad=12
-    )
-    ax.set_xlabel("Longitude (°E)", fontsize=9.5, fontweight="bold")
-    ax.set_ylabel("Latitude (°S)", fontsize=9.5, fontweight="bold")
-    ax.tick_params(axis="both", labelsize=8.5)
-    ax.grid(True, linestyle=":", linewidth=0.5, color="#555555", alpha=0.45, zorder=2)
-
-    # Bottom-left source recognition badge
-    if fence_features:
-        ax.text(
-            0.012, 0.012,
-            "Fencing Data Source: Mara Elephant Project (MEP)",
-            transform=ax.transAxes,
-            fontsize=7.0,
-            fontweight="bold",
-            color="#1F4E78",
-            ha="left",
-            va="bottom",
-            bbox=dict(facecolor="white", alpha=0.88, edgecolor="#1F4E78", linewidth=0.6, pad=1.8),
-            zorder=20
-        )
-
-    add_top_right_logo(ax, logo_bytes, logo_scale_pct=logo_scale_pct)
-    plt.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=240, bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return buf.getvalue()
-
-
-# ==============================================================================
-# STREAMLIT PAGE UI
-# ==============================================================================
-st.title("🏕️ Camps, Facilities & Fencing Map")
-st.markdown(
-    "Map **Camps & Facilities** alongside **Fencing Shapefiles** (sourced from the **Mara Elephant Project**), "
-    "with clean **Electric Fence / Wire Fence** legend styling and automatic symbol scaling for up to **1,000+ facilities**."
-)
-
-col1, col2 = st.columns(2)
-with col1:
-    camps_file = st.file_uploader(
-        "1️⃣ Upload Camps & Facilities Locations (CSV / Excel)",
-        type=["csv", "xlsx", "xls"],
-        key="camps_facilities_uploader"
-    )
-    fences_shp_zips = st.file_uploader(
-        "2️⃣ Upload Fences Shapefile (`.zip` — Source: Mara Elephant Project)",
-        type=["zip"],
-        accept_multiple_files=True,
-        key="mep_fences_shp_zip_uploader"
-    )
-    fences_attr_csv = st.file_uploader(
-        "3️⃣ Optional: Upload Fences Attribute Table CSV (`fenced Mt.csv`)",
-        type=["csv", "xlsx", "xls"],
-        key="mep_fences_csv_uploader"
-    )
-    logo_file = st.file_uploader(
-        "4️⃣ Upload Mara Conservancy / Company Logo (PNG / JPG — Top-Right)",
-        type=["png", "jpg", "jpeg"],
-        key="camps_company_logo_uploader"
-    )
-
-with col2:
-    conservancy_zips = st.file_uploader(
-        "5️⃣ Upload Conservancy / Park Boundary Shapefiles (`.zip` — one or multiple)",
-        type=["zip"],
-        accept_multiple_files=True,
-        key="camps_conservancy_zip_uploader"
-    )
-    roads_zip = st.file_uploader(
-        "6️⃣ Upload Roads & Tracks Shapefile (`.zip`)",
-        type=["zip"],
-        key="camps_roads_zip_uploader"
-    )
-    rivers_zips = st.file_uploader(
-        "7️⃣ Upload Rivers & Luggas Shapefiles (`.zip`)",
-        type=["zip"],
-        accept_multiple_files=True,
-        key="camps_rivers_zip_uploader"
-    )
-    ranger_posts_zip = st.file_uploader(
-        "8️⃣ Upload Ranger Posts / Gates Shapefile (`.zip`)",
-        type=["zip"],
-        key="camps_ranger_posts_zip_uploader"
-    )
-
-with st.sidebar:
-    st.subheader("Camps & Fences Map Settings")
-    map_title = st.text_input("Map Title", value="CAMPS, FACILITIES & FENCING DISTRIBUTION", key="camps_map_title_txt")
-    report_period = st.text_input("Report Period Label", value="November 2026", key="camps_map_period_txt")
-    zoom_level = st.slider("OpenTopoMap Tile Zoom Level", min_value=8, max_value=13, value=11, key="camps_topo_zoom")
-    logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=55, step=5, key="camps_logo_size_pct")
-    marker_scale_pct = st.slider(
-        "Facility Symbol Scale (% of Auto-Density Size)",
-        min_value=40,
-        max_value=160,
-        value=100,
-        step=10,
-        key="camps_marker_scale_pct"
-    )
-
-    st.divider()
-    st.subheader("Map Extent & Clean Label Options")
-    focus_on_facilities_extent = st.checkbox(
-        "Zoom Map Extent to Camps & Boundaries (Recommended when using Kenya-wide fence shapefiles)",
-        value=True,
-        key="camps_focus_extent_chk"
-    )
-    label_camps_on_map = st.checkbox(
-        "Show Camp / Facility Name Labels on Map",
-        value=False,
-        key="camps_labels_on_map_chk"
-    )
-    include_camp_names_in_legend = st.checkbox(
-        "Include Individual Camp / Facility Names in Legend",
-        value=False,
-        key="camps_names_in_legend_chk"
-    )
-    dedup_camps = st.checkbox(
-        "Remove Exact Duplicate Camp Coordinates",
-        value=True,
-        key="camps_dedup_chk"
-    )
-
-    st.divider()
-    st.subheader("Fencing Breakdown (Source: MEP)")
-    fence_breakdown_mode = st.radio(
-        "Classify Fences By:",
-        options=[
-            "Broad Type (Electric Fence vs. Wire Fence)",
-            "Detailed Strand Specification (e.g., Electric Fence 7-Strand, Wire Fence 5-Strand)"
-        ],
-        key="mep_fence_breakdown_radio"
-    )
-    only_active_fences = st.checkbox(
-        "Show Only Active Fences (active = 1) when status attribute exists",
-        value=False,
-        key="mep_only_active_fences_chk"
-    )
-
-    st.divider()
-    roads_legend_name = st.text_input("Roads Legend Label", value="Roads & Tracks", key="camps_roads_leg")
-    rivers_legend_name = st.text_input("Rivers & Luggas Legend Label", value="Rivers & Luggas", key="camps_rivers_leg")
-    ranger_legend_name = st.text_input("Ranger Posts Legend Label", value="Ranger Posts", key="camps_ranger_leg")
-    area_fill_opacity = st.slider("Boundary Shading Opacity (%)", min_value=0, max_value=55, value=20, step=2, key="camps_area_alpha")
-    show_poly_labels = st.checkbox("Label Conservancy / Park Areas", value=True, key="camps_poly_lbl")
-    show_post_labels = st.checkbox("Label Ranger Posts", value=False, key="camps_post_lbl")
-
-
-# ------------------------------------------------------------------------------
-# Parse Camps & Facilities Data
-# ------------------------------------------------------------------------------
-camps_df = pd.DataFrame()
-if camps_file is not None:
-    if camps_file.name.lower().endswith((".xlsx", ".xls")):
-        raw_camps = pd.read_excel(camps_file)
-    else:
-        raw_camps = pd.read_csv(camps_file)
-    try:
-        camps_df = parse_camps_facilities_dataframe(raw_camps, deduplicate=dedup_camps)
-    except ValueError as err:
-        st.error(str(err))
-        st.stop()
-
-    avail_fac_types = sorted(camps_df["Facility_Type"].unique().tolist())
-    selected_fac_types = st.multiselect(
-        "Filter Facility Categories to Display:",
-        options=avail_fac_types,
-        default=avail_fac_types,
-        key="camps_fac_type_filter"
-    )
-    if selected_fac_types:
-        camps_df = camps_df[camps_df["Facility_Type"].isin(selected_fac_types)].reset_index(drop=True)
-
-# ------------------------------------------------------------------------------
-# Parse Mara Elephant Project (MEP) Fencing Shapefiles (.zip) & Optional CSV
-# ------------------------------------------------------------------------------
-fence_features = []
-fence_shp_summary_df = pd.DataFrame()
-if fences_shp_zips:
-    raw_fence_feats = []
-    for fzip in fences_shp_zips:
-        try:
-            raw_fence_feats.extend(load_shapefile_zip(fzip, fallback_name="Fence"))
-        except Exception as e:
-            st.warning(f"Could not read Fence shapefile ({fzip.name}): {e}")
-    if raw_fence_feats:
-        fence_features, fence_shp_summary_df = process_mep_fence_shapefile_features(raw_fence_feats)
-        if only_active_fences and len(fence_features) > 0:
-            filtered_f = [f for f in fence_features if f.get("fence_active") == "Active (1)"]
-            if filtered_f:
-                fence_features = filtered_f
-                fence_shp_summary_df = fence_shp_summary_df[fence_shp_summary_df["Status"] == "Active (1)"].reset_index(drop=True)
-
-fence_csv_summary_df = pd.DataFrame()
-if fences_attr_csv is not None:
-    if fences_attr_csv.name.lower().endswith((".xlsx", ".xls")):
-        raw_f_csv = pd.read_excel(fences_attr_csv)
-    else:
-        raw_f_csv = pd.read_csv(fences_attr_csv)
-    fence_csv_summary_df = parse_mep_fence_attribute_csv(raw_f_csv)
-    if only_active_fences and len(fence_csv_summary_df) > 0:
-        act_sub = fence_csv_summary_df[fence_csv_summary_df["Status"] == "Active (1)"]
-        if len(act_sub) > 0:
-            fence_csv_summary_df = act_sub.reset_index(drop=True)
-
-# ------------------------------------------------------------------------------
-# Display Summary Tables & KPIs
-# ------------------------------------------------------------------------------
-if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0:
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Camps & Facilities", f"{len(camps_df):,}")
-    k2.metric("Facility Categories", f"{camps_df['Facility_Type'].nunique() if len(camps_df) > 0 else 0}")
-
-    active_fence_df = fence_shp_summary_df if len(fence_shp_summary_df) > 0 else fence_csv_summary_df
-    len_col_name = "Length (km)" if "Length (km)" in active_fence_df.columns else "Est. Length (km)"
-    if len(active_fence_df) > 0:
-        elec_segs = int((active_fence_df["Broad Category"] == "Electric Fence").sum())
-        wire_segs = int((active_fence_df["Broad Category"] == "Wire Fence").sum())
-        tot_km = float(active_fence_df[len_col_name].sum())
-        k3.metric("Electric Fence Segments", f"{elec_segs:,}")
-        k4.metric("Wire Fence Segments", f"{wire_segs:,}", delta=f"{tot_km:,.1f} km total")
-    else:
-        k3.metric("Electric Fences", "0")
-        k4.metric("Wire Fences", "0")
-
-    if len(camps_df) > 0:
-        with st.expander(f"📋 View Camps & Facilities Directory ({len(camps_df):,} locations)", expanded=False):
-            st.dataframe(
-                camps_df[["Name", "Facility_Type", "Lat", "Lon", "Reported_By"]],
-                use_container_width=True,
-                hide_index=True
-            )
-
-    if len(active_fence_df) > 0:
-        st.subheader("🐘 Fencing Breakdown (Data Source: Mara Elephant Project)")
-        f_agg = (
-            active_fence_df
-            .groupby(["Broad Category", "Detailed Fence Type", "Status"], as_index=False)
-            .agg(Segments=("Raw MEP Code", "count"), Total_Length_km=(len_col_name, "sum"))
-            .sort_values(by=["Broad Category", "Segments"], ascending=[True, False])
-        )
-        f_agg["Total_Length_km"] = f_agg["Total_Length_km"].round(2)
-        st.dataframe(f_agg, use_container_width=True, hide_index=True)
-
-    # Load optional boundary/infrastructure layers
-    conservancies_loaded = []
-    boundary_palette = ["#1B4F72", "#117864", "#7D3C98", "#B7950B", "#922B21"]
-    if conservancy_zips:
-        name_cols = st.columns(min(len(conservancy_zips), 3))
-        for idx, zfile in enumerate(conservancy_zips):
-            default_label = os.path.splitext(zfile.name)[0].replace("_", " ").title()
-            default_col = boundary_palette[idx % len(boundary_palette)]
-            with name_cols[idx % len(name_cols)]:
-                custom_name = st.text_input(
-                    f"Boundary {idx + 1} Name ({zfile.name})",
-                    value=default_label,
-                    key=f"camps_cons_name_{idx}_{zfile.name}"
+        else:
+            fac_types = work_df["Facility_Type"].value_counts().index.tolist()
+            for t_idx, f_type in enumerate(fac_types):
+                sub = work_df[work_df["Facility_Type"] == f_type]
+                col, marker_sym = FACILITY_STYLE_PALETTE.get(
+                    f_type, FALLBACK_FACILITY_STYLES[t_idx % len(FALLBACK_FACILITY_STYLES)]
                 )
-                chosen_col = st.color_picker(
-                    f"Boundary {idx + 1} Color",
-                    value=default_col,
-                    key=f"camps_cons_col_{idx}_{zfile.name}"
+                ax.scatter(
+                    sub["_plot_lon"],
+                    sub["_plot_lat"],
+                    s=adaptive_s,
+                    marker=marker_sym,
+                    c=col,
+                    edgecolors="white",
+                    linewidths=edge_lw,
+                    alpha=0.95,
+                    zorder=16
                 )
-            try:
-                feats_c = load_shapefile_zip(zfile, fallback_name=custom_name)
-                unique_fnames = set(f["name"] for f in feats_c)
-                if len(unique_fnames) == 1 and default_label in unique_fnames:
-                    for f in feats_c:
-                        f["name"] = custom_name
-                conservancies_loaded.append((custom_name, feats_c, chosen_col))
-            except Exception as e:
-                st.warning(f"Could not read {zfile.name}: {e}")
-
-    roads_features = []
-    if roads_zip is not None:
-        try:
-            roads_features = load_shapefile_zip(roads_zip, fallback_name=roads_legend_name)
-        except Exception as e:
-            st.warning(f"Could not read Roads shapefile: {e}")
-
-    rivers_features = []
-    if rivers_zips:
-        for rzip in rivers_zips:
-            try:
-                rivers_features.extend(load_shapefile_zip(rzip, fallback_name=rivers_legend_name))
-            except Exception as e:
-                st.warning(f"Could not read Rivers shapefile ({rzip.name}): {e}")
-
-    ranger_features = []
-    if ranger_posts_zip is not None:
-        try:
-            ranger_features = load_shapefile_zip(ranger_posts_zip, fallback_name=ranger_legend_name)
-        except Exception as e:
-            st.warning(f"Could not read Ranger Posts shapefile: {e}")
-
-    logo_bytes = None
-    if logo_file is not None:
-        try:
-            raw_logo = logo_file.getvalue()
-            Image.open(io.BytesIO(raw_logo)).verify()
-            logo_bytes = raw_logo
-        except Exception as e:
-            st.warning(f"Could not read logo ({logo_file.name}): {e}")
-
-    st.divider()
-    safe_period = report_period.replace(" ", "_")
-
-    if st.button("🗺️ Generate Camps, Facilities & Fencing Map", type="primary", key="btn_gen_camps_fences_map"):
-        with st.spinner("Rendering clean Camps, Facilities & Fencing Map..."):
-            try:
-                map_png = render_camps_and_fences_map(
-                    map_title=map_title,
-                    camps_df=camps_df,
-                    fence_features=fence_features,
-                    fence_breakdown_mode=fence_breakdown_mode,
-                    focus_on_facilities_extent=focus_on_facilities_extent,
-                    conservancies=conservancies_loaded,
-                    rivers_features=rivers_features,
-                    rivers_label=rivers_legend_name,
-                    roads_features=roads_features,
-                    roads_label=roads_legend_name,
-                    ranger_features=ranger_features,
-                    ranger_posts_label=ranger_legend_name,
-                    label_ranger_posts=show_post_labels,
-                    logo_bytes=logo_bytes,
-                    report_period=report_period,
-                    zoom_level=zoom_level,
-                    include_camp_names_in_legend=include_camp_names_in_legend,
-                    label_camps_on_map=label_camps_on_map,
-                    label_conservancies_on_map=show_poly_labels,
-                    logo_scale_pct=logo_scale_pct,
-                    area_fill_alpha=area_fill_opacity / 100.0,
-                    marker_scale_pct=marker_scale_pct,
-                )
-                st.session_state["camps_fences_map_png"] = map_png
-                st.session_state["camps_fences_period"] = safe_period
-            except Exception as exc:
-                st.error(f"Map generation error: {exc}")
-
-    if "camps_fences_map_png" in st.session_state:
-        saved_png = st.session_state["camps_fences_map_png"]
-        saved_per = st.session_state.get("camps_fences_period", safe_period)
-
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(f"Camps_Facilities_Fences_Map_{saved_per}.png", saved_png)
-            if len(camps_df) > 0:
-                zf.writestr(f"Camps_Facilities_Directory_{saved_per}.csv", camps_df.to_csv(index=False))
-            if len(active_fence_df) > 0:
-                zf.writestr(f"Fencing_Breakdown_MEP_{saved_per}.csv", active_fence_df.to_csv(index=False))
-        zip_buf.seek(0)
-
-        st.download_button(
-            label="📦 Download Map + Camps Directory + Fence Summary (.ZIP)",
-            data=zip_buf.getvalue(),
-            file_name=f"Mara_Camps_Facilities_Fences_{saved_per}.zip",
-            mime="application/zip",
-            key="dl_camps_fences_zip"
-        )
-
-        st.image(saved_png, caption=f"Camps, Facilities & Fencing Map ({report_period})", use_container_width=True)
-        st.download_button(
-            label="📥 Download Map Image (.png)",
-            data=saved_png,
-            file_name=f"Camps_Facilities_Fences_Map_{saved_per}.png",
-            mime="image/png",
-            key="dl_camps_fences_png"
-        )
-else:
-    st.info(
-        "👆 Upload your **Camps & Facilities CSV** and/or your "
-        "**Fences Shapefile (`.zip`)** above to generate the map."
-    )
+                fac_leg_lbl = f"{f_type} ({len(sub):,})" if show_legend_counts else f_type
+                legend_handles.append(
+                    mlines.Line2D(
+                        [], [],
+                        color="white",
