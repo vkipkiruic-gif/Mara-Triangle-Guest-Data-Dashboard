@@ -85,13 +85,16 @@ def _detect_crs_info(prj_text: str):
         return ("WEBMERCATOR", None)
     if "UTM" in up or "TRANSVERSE_MERCATOR" in up:
         zone = 36
-        for z in range(1, 61):
-            if f"ZONE_{z}" in up or f"ZONE {z}" in up or f"{z}S" in up or f"{z}N" in up:
-                zone = z
-                break
+        m_zone = re.search(r"ZONE[_\s]*(\d{1,2})", up)
+        if m_zone:
+            zone = int(m_zone.group(1))
+        else:
+            m_hem = re.search(r"\b(\d{1,2})[SN]\b", up)
+            if m_hem:
+                zone = int(m_hem.group(1))
         southern = (
             ("SOUTH" in up)
-            or (f"{zone}S" in up)
+            or bool(re.search(rf"{zone}S\b", up))
             or ("FALSE_NORTHING,10000000" in up.replace(" ", "").replace(chr(34), ""))
         )
         return ("UTM", (zone, southern))
@@ -910,7 +913,6 @@ FALLBACK_FACILITY_STYLES = [
     ("#2980B9", "P"), ("#1F618D", "^"), ("#6C3483", "v"),
 ]
 
-# Distinct translucent boundary palette (one distinct color per uploaded boundary file)
 CONSERVANCY_DISTINCT_PALETTE = [
     "#1E8449",  # Emerald Green (e.g., Mara Triangle)
     "#2874A6",  # Cerulean Blue (e.g., MMNR Boundary)
@@ -1060,7 +1062,7 @@ def render_camps_and_fences_map(
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    # 1. Bright Basemap Layer (Esri World Topographic blended over white canvas)
+    # 1. Bright Basemap Layer
     basemap_img, extent = fetch_basemap_tiles(
         min_lon, min_lat, max_lon, max_lat, zoom=zoom_level, provider_label=basemap_provider
     )
@@ -1071,9 +1073,7 @@ def render_camps_and_fences_map(
 
     legend_handles = []
 
-    # 2. Conservancy / Park Boundaries
-    # - Combined shapefiles (e.g., Conservancies) get ONE unified color & ONE legend entry ("Conservancies")
-    # - Fills BOTH Polygon (shape_type=5) AND closed-ring Polyline (shape_type=3) boundary files with translucent color!
+    # 2. Conservancy / Park Boundaries (Unified single color & legend entry per boundary shapefile)
     fill_alpha = min(max(area_fill_alpha, 0.08), 0.45) if area_fill_alpha > 0 else 0.0
     for layer_idx, (layer_label, c_feats, layer_col) in enumerate(conservancies):
         if not c_feats:
@@ -1086,7 +1086,6 @@ def render_camps_and_fences_map(
                     continue
                 xs = [p[0] for p in ring]
                 ys = [p[1] for p in ring]
-                # Fill both Polygon AND closed/nearly-closed Polyline boundary rings so MMNR & Conservancies get painted too!
                 is_closed_ring = (
                     feat["geom_type"] == "Polygon"
                     or (len(ring) >= 4 and math.hypot(ring[0][0] - ring[-1][0], ring[0][1] - ring[-1][1]) < 0.05)
@@ -1119,7 +1118,6 @@ def render_camps_and_fences_map(
                         zorder=9
                     )
 
-        # Clean single legend entry per uploaded boundary file (e.g., "Mara Triangle", "Mmnr Boundary", "Conservancies")
         legend_handles.append(
             mpatches.Patch(
                 facecolor=layer_col if fill_alpha > 0 else "none",
@@ -1511,28 +1509,28 @@ with col1:
     camps_file = st.file_uploader(
         "1️⃣ Upload Camps & Facilities Locations (CSV / Excel)",
         type=["csv", "xlsx", "xls"],
-        key="camps_facilities_uploader_v2"
+        key="camps_facilities_uploader_v3"
     )
     airstrips_file = st.file_uploader(
         "2️⃣ Upload Airstrips Locations (CSV / Excel)",
         type=["csv", "xlsx", "xls"],
-        key="camps_airstrips_uploader_v2"
+        key="camps_airstrips_uploader_v3"
     )
     fences_shp_zips = st.file_uploader(
         "3️⃣ Upload Fences Shapefile (`.zip` — Source: Mara Elephant Project)",
         type=["zip"],
         accept_multiple_files=True,
-        key="mep_fences_shp_zip_uploader_v2"
+        key="mep_fences_shp_zip_uploader_v3"
     )
     fences_attr_csv = st.file_uploader(
         "4️⃣ Optional: Upload Fences Attribute Table CSV (`fenced Mt.csv`)",
         type=["csv", "xlsx", "xls"],
-        key="mep_fences_csv_uploader_v2"
+        key="mep_fences_csv_uploader_v3"
     )
     logo_file = st.file_uploader(
         "5️⃣ Upload Mara Conservancy / Company Logo (PNG / JPG — Top-Right)",
         type=["png", "jpg", "jpeg"],
-        key="camps_company_logo_uploader_v2"
+        key="camps_company_logo_uploader_v3"
     )
 
 with col2:
@@ -1540,23 +1538,23 @@ with col2:
         "6️⃣ Upload Conservancy / Park Boundary Shapefiles (`.zip` — one or multiple)",
         type=["zip"],
         accept_multiple_files=True,
-        key="camps_conservancy_zip_uploader_v2"
+        key="camps_conservancy_zip_uploader_v3"
     )
     roads_zip = st.file_uploader(
         "7️⃣ Upload Roads & Tracks Shapefile (`.zip`)",
         type=["zip"],
-        key="camps_roads_zip_uploader_v2"
+        key="camps_roads_zip_uploader_v3"
     )
     rivers_zips = st.file_uploader(
         "8️⃣ Upload Rivers & Luggas Shapefiles (`.zip`)",
         type=["zip"],
         accept_multiple_files=True,
-        key="camps_rivers_zip_uploader_v2"
+        key="camps_rivers_zip_uploader_v3"
     )
     ranger_posts_zip = st.file_uploader(
         "9️⃣ Upload Ranger Posts / Gates Shapefile (`.zip`)",
         type=["zip"],
-        key="camps_ranger_posts_zip_uploader_v2"
+        key="camps_ranger_posts_zip_uploader_v3"
     )
 
 with st.sidebar:
@@ -1565,25 +1563,25 @@ with st.sidebar:
         "Map Sheet / Paper Size",
         options=list(PAPER_SIZES_INCHES.keys()),
         index=0,
-        key="camps_paper_size_sel_v2"
+        key="camps_paper_size_sel_v3"
     )
     basemap_provider = st.selectbox(
         "Background Map Layer",
         options=list(BASEMAP_PROVIDERS.keys()),
         index=0,
-        key="camps_basemap_provider_sel_v2"
+        key="camps_basemap_provider_sel_v3"
     )
-    map_title = st.text_input("Map Title", value="TENTED CAMPS, LODGES & FENCING DISTRIBUTION", key="camps_map_title_txt_v2")
-    report_period = st.text_input("Report Period Label", value="November 2026", key="camps_map_period_txt_v2")
-    zoom_level = st.slider("Map Tile Detail (Zoom)", min_value=9, max_value=13, value=11, key="camps_topo_zoom_v2")
-    logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=60, step=5, key="camps_logo_size_pct_v2")
+    map_title = st.text_input("Map Title", value="TENTED CAMPS, LODGES & FENCING DISTRIBUTION", key="camps_map_title_txt_v3")
+    report_period = st.text_input("Report Period Label", value="November 2026", key="camps_map_period_txt_v3")
+    zoom_level = st.slider("Map Tile Detail (Zoom)", min_value=9, max_value=13, value=11, key="camps_topo_zoom_v3")
+    logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=60, step=5, key="camps_logo_size_pct_v3")
     marker_scale_pct = st.slider(
         "Tented Camps & Airstrips Icon Size (%)",
         min_value=50,
         max_value=200,
         value=125,
         step=10,
-        key="camps_marker_scale_pct_v2"
+        key="camps_marker_scale_pct_v3"
     )
 
     st.divider()
@@ -1591,37 +1589,37 @@ with st.sidebar:
     group_all_facilities_as_one = st.checkbox(
         "Group All Facilities as 'Tented Camps & Lodges' (Single Standout Color)",
         value=True,
-        key="camps_group_unified_chk_v2"
+        key="camps_group_unified_chk_v3"
     )
     show_legend_counts = st.checkbox(
         "Show Numbers / Kilometers in Legend",
         value=False,
-        key="camps_show_leg_counts_chk_v2"
+        key="camps_show_leg_counts_chk_v3"
     )
     focus_on_facilities_extent = st.checkbox(
         "Frame Map Around Camps & Boundaries (Recommended)",
         value=True,
-        key="camps_focus_extent_chk_v2"
+        key="camps_focus_extent_chk_v3"
     )
     label_airstrips_on_map = st.checkbox(
         "Show Small Airstrip Names on Map (Name Only)",
         value=False,
-        key="camps_label_airstrips_chk_v2"
+        key="camps_label_airstrips_chk_v3"
     )
     label_camps_on_map = st.checkbox(
         "Show Camp / Facility Name Labels on Map",
         value=False,
-        key="camps_labels_on_map_chk_v2"
+        key="camps_labels_on_map_chk_v3"
     )
     include_camp_names_in_legend = st.checkbox(
         "Include Individual Camp / Facility Names in Legend",
         value=False,
-        key="camps_names_in_legend_chk_v2"
+        key="camps_names_in_legend_chk_v3"
     )
     dedup_camps = st.checkbox(
         "Remove Exact Duplicate Coordinates",
         value=True,
-        key="camps_dedup_chk_v2"
+        key="camps_dedup_chk_v3"
     )
 
     st.divider()
@@ -1632,12 +1630,12 @@ with st.sidebar:
             "Broad Type (Electric Fence vs. Wire Fence)",
             "Detailed Strand Specification (e.g., Electric Fence 7-Strand, Wire Fence 5-Strand)"
         ],
-        key="mep_fence_breakdown_radio_v2"
+        key="mep_fence_breakdown_radio_v3"
     )
     only_active_fences = st.checkbox(
         "Show Only Active Fences (active = 1) when status attribute exists",
         value=False,
-        key="mep_only_active_fences_chk_v2"
+        key="mep_only_active_fences_chk_v3"
     )
 
     st.divider()
@@ -1648,13 +1646,13 @@ with st.sidebar:
         max_value=45,
         value=22,
         step=2,
-        key="camps_area_alpha_v2"
+        key="camps_area_alpha_v3"
     )
-    show_poly_labels = st.checkbox("Label Conservancy / Park Areas on Map", value=False, key="camps_poly_lbl_v2")
-    roads_legend_name = st.text_input("Roads Legend Label", value="Roads & Tracks", key="camps_roads_leg_v2")
-    rivers_legend_name = st.text_input("Rivers & Luggas Legend Label", value="Rivers & Luggas", key="camps_rivers_leg_v2")
-    ranger_legend_name = st.text_input("Ranger Posts Legend Label", value="Ranger Posts", key="camps_ranger_leg_v2")
-    show_post_labels = st.checkbox("Label Ranger Posts", value=False, key="camps_post_lbl_v2")
+    show_poly_labels = st.checkbox("Label Conservancy / Park Areas on Map", value=False, key="camps_poly_lbl_v3")
+    roads_legend_name = st.text_input("Roads Legend Label", value="Roads & Tracks", key="camps_roads_leg_v3")
+    rivers_legend_name = st.text_input("Rivers & Luggas Legend Label", value="Rivers & Luggas", key="camps_rivers_leg_v3")
+    ranger_legend_name = st.text_input("Ranger Posts Legend Label", value="Ranger Posts", key="camps_ranger_leg_v3")
+    show_post_labels = st.checkbox("Label Ranger Posts", value=False, key="camps_post_lbl_v3")
 
 
 # ------------------------------------------------------------------------------
@@ -1677,7 +1675,7 @@ if camps_file is not None:
         "Filter Source Facility Categories to Include:",
         options=avail_fac_types,
         default=avail_fac_types,
-        key="camps_fac_type_filter_v2"
+        key="camps_fac_type_filter_v3"
     )
     if selected_fac_types:
         camps_df = camps_df[camps_df["Facility_Type"].isin(selected_fac_types)].reset_index(drop=True)
@@ -1794,7 +1792,6 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
         name_cols = st.columns(min(len(conservancy_zips), 3))
         for idx, zfile in enumerate(conservancy_zips):
             raw_stem = os.path.splitext(zfile.name)[0].replace("_", " ").strip()
-            # Automatically label multi-conservancy combined files cleanly as "Conservancies"
             if any(k in raw_stem.lower() for k in ["conservanc", "isinya", "olarro", "ripoi"]):
                 default_label = "Conservancies"
             else:
@@ -1804,12 +1801,12 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
                 custom_name = st.text_input(
                     f"Boundary {idx + 1} Legend Label ({zfile.name})",
                     value=default_label,
-                    key=f"camps_cons_name_v2_{idx}_{zfile.name}"
+                    key=f"camps_cons_name_v3_{idx}_{zfile.name}"
                 )
                 chosen_col = st.color_picker(
                     f"Boundary {idx + 1} Translucent Color",
                     value=default_col,
-                    key=f"camps_cons_col_v2_{idx}_{zfile.name}"
+                    key=f"camps_cons_col_v3_{idx}_{zfile.name}"
                 )
             try:
                 feats_c = load_shapefile_zip(zfile, fallback_name=custom_name)
@@ -1851,7 +1848,7 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
     st.divider()
     safe_period = report_period.replace(" ", "_")
 
-    if st.button("🗺️ Generate Large-Format Camps, Airstrips & Fencing Map", type="primary", key="btn_gen_camps_fences_map_v2"):
+    if st.button("🗺️ Generate Large-Format Camps, Airstrips & Fencing Map", type="primary", key="btn_gen_camps_fences_map_v3"):
         with st.spinner("Rendering bright high-resolution large-format map..."):
             try:
                 map_png = render_camps_and_fences_map(
@@ -1884,14 +1881,14 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
                     area_fill_alpha=area_fill_opacity / 100.0,
                     marker_scale_pct=marker_scale_pct,
                 )
-                st.session_state["camps_fences_map_png_v2"] = map_png
-                st.session_state["camps_fences_period_v2"] = safe_period
+                st.session_state["camps_fences_map_png_v3"] = map_png
+                st.session_state["camps_fences_period_v3"] = safe_period
             except Exception as exc:
                 st.error(f"Map generation error: {exc}")
 
-    if "camps_fences_map_png_v2" in st.session_state:
-        saved_png = st.session_state["camps_fences_map_png_v2"]
-        saved_per = st.session_state.get("camps_fences_period_v2", safe_period)
+    if "camps_fences_map_png_v3" in st.session_state:
+        saved_png = st.session_state["camps_fences_map_png_v3"]
+        saved_per = st.session_state.get("camps_fences_period_v3", safe_period)
 
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1909,7 +1906,7 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
             data=zip_buf.getvalue(),
             file_name=f"Mara_Tented_Camps_Lodges_Airstrips_Fences_{saved_per}.zip",
             mime="application/zip",
-            key="dl_camps_fences_zip_v2"
+            key="dl_camps_fences_zip_v3"
         )
 
         st.image(saved_png, caption=f"Tented Camps, Lodges, Airstrips & Fencing Map ({report_period})", use_container_width=True)
@@ -1918,7 +1915,7 @@ if len(camps_df) > 0 or len(airstrips_df) > 0 or len(fence_features) > 0 or len(
             data=saved_png,
             file_name=f"Tented_Camps_Lodges_Airstrips_Fences_Map_{saved_per}.png",
             mime="image/png",
-            key="dl_camps_fences_png_v2"
+            key="dl_camps_fences_png_v3"
         )
 else:
     st.info(
