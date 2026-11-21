@@ -10,6 +10,7 @@ import zipfile
 
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+import matplotlib.path as mpath
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -260,13 +261,39 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
         return features
 
 
-def get_features_bounds(features: list[dict]):
+def get_features_bounds(features: list[dict], clip_near_box=None):
+    """
+    Computes (min_lon, min_lat, max_lon, max_lat) for features.
+    If `clip_near_box` = (ref_min_lon, ref_min_lat, ref_max_lon, ref_max_lat) is passed,
+    only features intersecting within 0.45° of that reference box are included so far-away
+    polygons (e.g., national or distant parks across Kenya) never zoom the map out.
+    """
     xs, ys = [], []
     for feat in features:
+        f_xs, f_ys = [], []
         for ring in feat["parts"]:
             for lon, lat in ring:
-                xs.append(lon)
-                ys.append(lat)
+                if -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0:
+                    f_xs.append(lon)
+                    f_ys.append(lat)
+        if not f_xs:
+            continue
+        f_min_x, f_max_x = min(f_xs), max(f_xs)
+        f_min_y, f_max_y = min(f_ys), max(f_ys)
+
+        if clip_near_box is not None:
+            pad = 0.45
+            if (
+                f_max_x < clip_near_box[0] - pad
+                or f_min_x > clip_near_box[2] + pad
+                or f_max_y < clip_near_box[1] - pad
+                or f_min_y > clip_near_box[3] + pad
+            ):
+                continue
+
+        xs.extend([f_min_x, f_max_x])
+        ys.extend([f_min_y, f_max_y])
+
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))
@@ -613,7 +640,7 @@ def fetch_basemap_tiles(
 # ==============================================================================
 # 4. CARTOGRAPHIC HELPERS: NORTH ARROW + BEARING ROSE, SCALE BAR, LOGO
 # ==============================================================================
-def draw_compass_and_bearing(ax, x_frac=0.06, y_frac=0.89):
+def draw_compass_and_bearing(ax, x_frac=0.055, y_frac=0.895):
     ax_inset = ax.inset_axes([x_frac - 0.045, y_frac - 0.065, 0.09, 0.13], transform=ax.transAxes)
     ax_inset.set_xlim(-1.45, 1.45)
     ax_inset.set_ylim(-1.45, 1.45)
@@ -754,36 +781,60 @@ def add_top_right_logo(ax, logo_bytes, logo_scale_pct: int = 55):
 
 def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> float:
     """
-    Automatically scales point marker area (`s` in points^2) so symbols remain bold and
+    Automatically scales point marker area (`s` in points^2) so tent icons remain bold and
     distinct on large-format paper while preventing crowding up to 1,000+ facilities.
     """
     if num_points <= 40:
-        base_s = 105.0
+        base_s = 135.0
     elif num_points <= 120:
-        base_s = 78.0
+        base_s = 105.0
     elif num_points <= 300:
-        base_s = 54.0
+        base_s = 78.0
     elif num_points <= 600:
-        base_s = 36.0
+        base_s = 52.0
     elif num_points <= 950:
-        base_s = 25.0
+        base_s = 36.0
     else:
-        base_s = 18.0
-    return max(base_s * (max(user_scale_pct, 30) / 100.0), 8.0)
+        base_s = 26.0
+    return max(base_s * (max(user_scale_pct, 30) / 100.0), 12.0)
 
 
 # ==============================================================================
-# 5. RENDER CAMPS, FACILITIES & MEP FENCING MAP (LARGE A2/A3 LANDSCAPE SHEET)
+# 5. CUSTOM A-FRAME TENT / CAMP TRIANGLE ICON & STYLES
 # ==============================================================================
+def _build_safari_tent_marker() -> mpath.Path:
+    """Creates a crisp A-frame safari tent triangle icon with a central doorway flap."""
+    verts = [
+        (0.0, 1.08),      # Tent peak
+        (1.02, -0.86),    # Bottom right corner
+        (0.28, -0.86),    # Right of tent doorway
+        (0.0, -0.14),     # Doorway apex
+        (-0.28, -0.86),   # Left of tent doorway
+        (-1.02, -0.86),   # Bottom left corner
+        (0.0, 1.08),      # Close tent outline
+    ]
+    codes = [
+        mpath.Path.MOVETO,
+        mpath.Path.LINETO,
+        mpath.Path.LINETO,
+        mpath.Path.LINETO,
+        mpath.Path.LINETO,
+        mpath.Path.LINETO,
+        mpath.Path.CLOSEPOLY,
+    ]
+    return mpath.Path(verts, codes)
+
+
+TENT_CAMP_MARKER = _build_safari_tent_marker()
 UNIFIED_FACILITY_COLOR = "#0057FF"     # Vivid cobalt blue — stands out sharply against red/orange fences & terrain
-UNIFIED_FACILITY_MARKER = "o"
+UNIFIED_FACILITY_MARKER = TENT_CAMP_MARKER
 UNIFIED_FACILITY_LABEL = "Tented Camps & Lodges"
 
 FACILITY_STYLE_PALETTE = {
-    "Tented Camp": ("#0057FF", "o"),
+    "Tented Camp": ("#0057FF", TENT_CAMP_MARKER),
     "Lodge": ("#7D3C98", "s"),
-    "Eco-Lodge": ("#117864", "D"),
-    "Eco Camp": ("#008B8B", "P"),
+    "Eco-Lodge": ("#117864", TENT_CAMP_MARKER),
+    "Eco Camp": ("#008B8B", TENT_CAMP_MARKER),
     "Ranger Post": ("#1E8449", "^"),
     "Gate": ("#1F4E78", "v"),
     "Cottage": ("#8E44AD", "v"),
@@ -791,7 +842,7 @@ FACILITY_STYLE_PALETTE = {
     "Airstrip": ("#2C3E50", "h"),
 }
 FALLBACK_FACILITY_STYLES = [
-    ("#0057FF", "o"), ("#8E44AD", "s"), ("#16A085", "D"),
+    ("#0057FF", TENT_CAMP_MARKER), ("#8E44AD", "s"), ("#16A085", "D"),
     ("#2980B9", "P"), ("#1F618D", "^"), ("#6C3483", "v"),
 ]
 
@@ -854,33 +905,40 @@ def render_camps_and_fences_map(
     label_conservancies_on_map: bool = True,
     logo_scale_pct: int = 60,
     area_fill_alpha: float = 0.20,
-    marker_scale_pct: int = 115,
+    marker_scale_pct: int = 125,
 ) -> bytes:
     """
-    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges overlaid
-    with fencing data (sourced from Mara Elephant Project), shifted flush-left so the lower-right
-    legend sits in open space without overlapping camps or southern/eastern fences.
+    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges (with tent
+    triangle icons) overlaid with fencing data (Mara Elephant Project), zoomed cleanly onto the
+    local Mara area and shifted left so the lower-right legend sits in open space without overlap.
     """
     conservancies = conservancies or []
     rivers_features = rivers_features or []
     roads_features = roads_features or []
     ranger_features = ranger_features or []
 
-    bounds_list = []
+    # Anchor reference box on the Tented Camps & Lodges so far-away polygons
+    # (such as national or distant parks across Kenya) never zoom the map out!
+    camps_ref_box = None
     if len(camps_df) > 0:
-        bounds_list.append((
+        camps_ref_box = (
             float(camps_df["Lon"].min()),
             float(camps_df["Lat"].min()),
             float(camps_df["Lon"].max()),
             float(camps_df["Lat"].max()),
-        ))
+        )
+
+    bounds_list = []
+    if camps_ref_box is not None:
+        bounds_list.append(camps_ref_box)
+
     for _, c_feats, _ in conservancies:
-        b = get_features_bounds(c_feats)
+        b = get_features_bounds(c_feats, clip_near_box=camps_ref_box)
         if b is not None:
             bounds_list.append(b)
 
-    if fence_features and (not focus_on_facilities_extent or not bounds_list):
-        fb = get_features_bounds(fence_features)
+    if fence_features:
+        fb = get_features_bounds(fence_features, clip_near_box=camps_ref_box)
         if fb is not None:
             bounds_list.append(fb)
 
@@ -892,26 +950,16 @@ def render_camps_and_fences_map(
     else:
         min_lon, min_lat, max_lon, max_lat = 34.82, -1.70, 35.42, -1.20
 
-    # Include fence bounds so eastern/southern fences are never clipped,
-    # while anchoring the western (left) edge tightly so the map shifts left and fills empty left space.
-    if fence_features:
-        fb = get_features_bounds(fence_features)
-        if fb is not None:
-            min_lon = min(min_lon, fb[0])
-            min_lat = min(min_lat, fb[1])
-            max_lon = max(max_lon, fb[2])
-            max_lat = max(max_lat, fb[3])
-
     lon_span = max(max_lon - min_lon, 0.05)
     lat_span = max(max_lat - min_lat, 0.05)
 
-    # Tight left margin (4%) so the map shifts left to fill the empty space,
-    # and generous right/bottom margin (14% right, 10% bottom, 8% top) so the lower-right legend
-    # never overlaps southern/eastern fences or camps.
-    min_lon = min_lon - lon_span * 0.04
-    max_lon = max_lon + lon_span * 0.14
-    min_lat = min_lat - lat_span * 0.10
-    max_lat = max_lat + lat_span * 0.08
+    # Tight left margin (3%) so the map shifts left to fill the empty left space,
+    # and generous right/bottom margin (15% right, 11% bottom, 7% top) so the lower-right legend
+    # sits in open space without covering southeastern camps or fence segments!
+    min_lon = min_lon - lon_span * 0.03
+    max_lon = max_lon + lon_span * 0.15
+    min_lat = min_lat - lat_span * 0.11
+    max_lat = max_lat + lat_span * 0.07
 
     fig_w, fig_h = PAPER_SIZES_INCHES.get(paper_size_label, (23.4, 16.5))
     target_aspect = fig_w / fig_h
@@ -927,10 +975,10 @@ def render_camps_and_fences_map(
         desired_ground_w = ground_height * target_aspect
         desired_lon_span = desired_ground_w / cos_lat
         extra_lon = desired_lon_span - cur_lon_span
-        # Shift 85% of the extra width to the right side and only 15% to the left
-        # so the map sits flush-left and creates clean open space on the lower right for the legend.
-        min_lon -= extra_lon * 0.15
-        max_lon += extra_lon * 0.85
+        # Shift 90% of the extra width to the right side and only 10% to the left
+        # so the map sits flush-left and creates clean open space on the lower right for the legend!
+        min_lon -= extra_lon * 0.10
+        max_lon += extra_lon * 0.90
     else:
         desired_lat_span = ground_width / target_aspect
         lat_center = (min_lat + max_lat) / 2.0
@@ -1025,7 +1073,7 @@ def render_camps_and_fences_map(
             mlines.Line2D([], [], color="#0066CC", linewidth=1.9, label=rivers_label)
         )
 
-    # 5. Fencing Layer (Clean Legend Labels: "Electric Fence", "Wire Fence" — NO numbers unless requested)
+    # 5. Fencing Layer
     if fence_features:
         use_detailed = fence_breakdown_mode.startswith("Detailed")
         key_field = "fence_detail" if use_detailed else "fence_broad"
@@ -1096,12 +1144,12 @@ def render_camps_and_fences_map(
             mlines.Line2D([], [], color="white", marker="^", markerfacecolor="#1E8449", markeredgecolor="white", markersize=8.5, label=ranger_posts_label)
         )
 
-    # 7. Plot Tented Camps & Lodges (Unified Single Category or Breakdown)
+    # 7. Plot Tented Camps & Lodges (Triangle Camp Tent Icon)
     if len(camps_df) > 0:
         work_df = camps_df.copy().reset_index(drop=True)
         n_total_pts = len(work_df)
         adaptive_s = compute_adaptive_marker_size(n_total_pts, user_scale_pct=marker_scale_pct) * (size_mult ** 1.25)
-        edge_lw = 0.65 if n_total_pts >= 400 else (0.95 if n_total_pts >= 150 else 1.25)
+        edge_lw = 0.75 if n_total_pts >= 400 else (1.05 if n_total_pts >= 150 else 1.35)
         jitter_rad = 0.00035 if n_total_pts >= 250 else 0.00080
 
         coord_counts = {}
@@ -1131,7 +1179,7 @@ def render_camps_and_fences_map(
                 c=UNIFIED_FACILITY_COLOR,
                 edgecolors="white",
                 linewidths=edge_lw,
-                alpha=0.95,
+                alpha=0.96,
                 zorder=16
             )
             fac_leg_lbl = f"{UNIFIED_FACILITY_LABEL} ({len(work_df):,})" if show_legend_counts else UNIFIED_FACILITY_LABEL
@@ -1141,9 +1189,9 @@ def render_camps_and_fences_map(
                     color="white",
                     marker=UNIFIED_FACILITY_MARKER,
                     markerfacecolor=UNIFIED_FACILITY_COLOR,
-                    markeredgecolor="white",
-                    markeredgewidth=1.0,
-                    markersize=9.5,
+                    markeredgecolor="#002B80",
+                    markeredgewidth=0.9,
+                    markersize=11.5,
                     label=fac_leg_lbl
                 )
             )
@@ -1155,8 +1203,8 @@ def render_camps_and_fences_map(
                             color="white",
                             marker=UNIFIED_FACILITY_MARKER,
                             markerfacecolor=UNIFIED_FACILITY_COLOR,
-                            markeredgecolor="white",
-                            markersize=6.0,
+                            markeredgecolor="#002B80",
+                            markersize=7.5,
                             label=f"  • {sr['Name']}"
                         )
                     )
@@ -1189,7 +1237,7 @@ def render_camps_and_fences_map(
                     c=col,
                     edgecolors="white",
                     linewidths=edge_lw,
-                    alpha=0.95,
+                    alpha=0.96,
                     zorder=16
                 )
                 fac_leg_lbl = f"{f_type} ({len(sub):,})" if show_legend_counts else f_type
@@ -1201,7 +1249,7 @@ def render_camps_and_fences_map(
                         markerfacecolor=col,
                         markeredgecolor="white",
                         markeredgewidth=0.9,
-                        markersize=8.5,
+                        markersize=10.5,
                         label=fac_leg_lbl
                     )
                 )
@@ -1214,7 +1262,7 @@ def render_camps_and_fences_map(
                                 marker=marker_sym,
                                 markerfacecolor=col,
                                 markeredgecolor="white",
-                                markersize=6.0,
+                                markersize=7.0,
                                 label=f"  • {sr['Name']}"
                             )
                         )
@@ -1401,10 +1449,10 @@ with st.sidebar:
     zoom_level = st.slider("Map Tile Detail (Zoom)", min_value=9, max_value=13, value=11, key="camps_topo_zoom")
     logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=60, step=5, key="camps_logo_size_pct")
     marker_scale_pct = st.slider(
-        "Tented Camps & Lodges Symbol Size (%)",
+        "Tented Camps & Lodges Tent Icon Size (%)",
         min_value=50,
         max_value=200,
-        value=115,
+        value=125,
         step=10,
         key="camps_marker_scale_pct"
     )
