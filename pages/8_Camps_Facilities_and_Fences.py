@@ -189,8 +189,6 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
             if crs_info is not None and crs_info[0] == "UTM":
                 zone, southern = crs_info[1]
                 return _utm_to_wgs84(x, y, zone=zone, southern=southern)
-            # Heuristic fallback when .prj is missing:
-            # In Kenya/East Africa, Web Mercator X is ~3.7M-4.3M and Y is ~-500k to +500k
             if 3_200_000 <= abs(x) <= 5_000_000 and abs(y) <= 1_200_000:
                 return _web_mercator_to_wgs84(x, y)
             return _utm_to_wgs84(x, y, zone=36, southern=True)
@@ -289,6 +287,10 @@ def get_feature_centroid(feat: dict):
 # 2. PARSE CAMPS & FACILITIES CSV + MARA ELEPHANT PROJECT (MEP) FENCES DATA
 # ==============================================================================
 def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True) -> pd.DataFrame:
+    """
+    Parses EarthRanger / Park Camps & Facilities CSV/Excel into a standardized DataFrame:
+    Columns: Name, Facility_Type, Lat, Lon, Reported_By, Report_Id
+    """
     work = df.copy()
     work.columns = [str(c).strip() for c in work.columns]
 
@@ -341,6 +343,10 @@ def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True)
 
 
 def classify_mep_fence_type(raw_type: str) -> tuple[str, str, str]:
+    """
+    Classifies Mara Elephant Project (MEP) fence codes into clean legend labels:
+      (Broad_Category, Detailed_Subtype_Label, Strand_Detail)
+    """
     s = str(raw_type or "").strip()
     low = s.lower()
 
@@ -406,6 +412,10 @@ def compute_polyline_length_km(parts: list[list[tuple[float, float]]]) -> float:
 
 
 def process_mep_fence_shapefile_features(raw_features: list[dict]) -> tuple[list[dict], pd.DataFrame]:
+    """
+    Enriches shapefile features from the Mara Elephant Project (MEP) fencing dataset
+    with standardized Electric vs Wire classification, active status, and segment length in km.
+    """
     enriched = []
     rows = []
     for feat in raw_features:
@@ -463,6 +473,9 @@ def process_mep_fence_shapefile_features(raw_features: list[dict]) -> tuple[list
 
 
 def parse_mep_fence_attribute_csv(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parses the Mara Elephant Project (MEP) fence attribute table CSV (e.g., `fenced Mt.csv`).
+    """
     work = df.copy()
     work.columns = [str(c).strip() for c in work.columns]
     col_map = {c.lower(): c for c in work.columns}
@@ -740,6 +753,10 @@ def add_top_right_logo(ax, logo_bytes, logo_scale_pct: int = 55):
 
 
 def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> float:
+    """
+    Automatically scales point marker area (`s` in points^2) so symbols remain bold and
+    distinct on large-format paper while preventing crowding up to 1,000+ facilities.
+    """
     if num_points <= 40:
         base_s = 105.0
     elif num_points <= 120:
@@ -758,7 +775,7 @@ def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> 
 # ==============================================================================
 # 5. RENDER CAMPS, FACILITIES & MEP FENCING MAP (LARGE A2/A3 LANDSCAPE SHEET)
 # ==============================================================================
-UNIFIED_FACILITY_COLOR = "#0057FF"
+UNIFIED_FACILITY_COLOR = "#0057FF"     # Vivid cobalt blue — stands out sharply against red/orange fences & terrain
 UNIFIED_FACILITY_MARKER = "o"
 UNIFIED_FACILITY_LABEL = "Tented Camps & Lodges"
 
@@ -839,6 +856,11 @@ def render_camps_and_fences_map(
     area_fill_alpha: float = 0.20,
     marker_scale_pct: int = 115,
 ) -> bytes:
+    """
+    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges overlaid
+    with fencing data (sourced from Mara Elephant Project), shifted flush-left so the lower-right
+    legend sits in open space without overlapping camps or southern/eastern fences.
+    """
     conservancies = conservancies or []
     rivers_features = rivers_features or []
     roads_features = roads_features or []
@@ -870,12 +892,26 @@ def render_camps_and_fences_map(
     else:
         min_lon, min_lat, max_lon, max_lat = 34.82, -1.70, 35.42, -1.20
 
+    # Include fence bounds so eastern/southern fences are never clipped,
+    # while anchoring the western (left) edge tightly so the map shifts left and fills empty left space.
+    if fence_features:
+        fb = get_features_bounds(fence_features)
+        if fb is not None:
+            min_lon = min(min_lon, fb[0])
+            min_lat = min(min_lat, fb[1])
+            max_lon = max(max_lon, fb[2])
+            max_lat = max(max_lat, fb[3])
+
     lon_span = max(max_lon - min_lon, 0.05)
     lat_span = max(max_lat - min_lat, 0.05)
-    min_lon -= lon_span * 0.18
-    max_lon += lon_span * 0.18
-    min_lat -= lat_span * 0.18
-    max_lat += lat_span * 0.18
+
+    # Tight left margin (4%) so the map shifts left to fill the empty space,
+    # and generous right/bottom margin (14% right, 10% bottom, 8% top) so the lower-right legend
+    # never overlaps southern/eastern fences or camps.
+    min_lon = min_lon - lon_span * 0.04
+    max_lon = max_lon + lon_span * 0.14
+    min_lat = min_lat - lat_span * 0.10
+    max_lat = max_lat + lat_span * 0.08
 
     fig_w, fig_h = PAPER_SIZES_INCHES.get(paper_size_label, (23.4, 16.5))
     target_aspect = fig_w / fig_h
@@ -890,9 +926,11 @@ def render_camps_and_fences_map(
     if (ground_width / ground_height) < target_aspect:
         desired_ground_w = ground_height * target_aspect
         desired_lon_span = desired_ground_w / cos_lat
-        lon_center = (min_lon + max_lon) / 2.0
-        min_lon = lon_center - desired_lon_span / 2.0
-        max_lon = lon_center + desired_lon_span / 2.0
+        extra_lon = desired_lon_span - cur_lon_span
+        # Shift 85% of the extra width to the right side and only 15% to the left
+        # so the map sits flush-left and creates clean open space on the lower right for the legend.
+        min_lon -= extra_lon * 0.15
+        max_lon += extra_lon * 0.85
     else:
         desired_lat_span = ground_width / target_aspect
         lat_center = (min_lat + max_lat) / 2.0
@@ -987,7 +1025,7 @@ def render_camps_and_fences_map(
             mlines.Line2D([], [], color="#0066CC", linewidth=1.9, label=rivers_label)
         )
 
-    # 5. Fencing Layer (MEP Fences)
+    # 5. Fencing Layer (Clean Legend Labels: "Electric Fence", "Wire Fence" — NO numbers unless requested)
     if fence_features:
         use_detailed = fence_breakdown_mode.startswith("Detailed")
         key_field = "fence_detail" if use_detailed else "fence_broad"
@@ -1058,7 +1096,7 @@ def render_camps_and_fences_map(
             mlines.Line2D([], [], color="white", marker="^", markerfacecolor="#1E8449", markeredgecolor="white", markersize=8.5, label=ranger_posts_label)
         )
 
-    # 7. Plot Tented Camps & Lodges
+    # 7. Plot Tented Camps & Lodges (Unified Single Category or Breakdown)
     if len(camps_df) > 0:
         work_df = camps_df.copy().reset_index(drop=True)
         n_total_pts = len(work_df)
@@ -1199,7 +1237,7 @@ def render_camps_and_fences_map(
     draw_compass_and_bearing(ax, x_frac=0.055, y_frac=0.895)
     draw_scale_bar(ax, min_lon, max_lon, min_lat, max_lat)
 
-    # 9. Clean, Unclipped Legend
+    # 9. Clean, Unclipped Legend (Lower-Right Open Space or Outside if >18 items)
     n_leg = len(legend_handles)
     leg_fs = 8.5 * max(size_mult * 0.78, 0.95)
     title_fs = 9.2 * max(size_mult * 0.78, 0.95)
