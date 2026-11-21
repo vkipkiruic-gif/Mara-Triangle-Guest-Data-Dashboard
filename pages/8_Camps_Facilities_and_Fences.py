@@ -68,19 +68,35 @@ def _utm_to_wgs84(easting: float, northing: float, zone: int = 36, southern: boo
     return math.degrees(lon_rad), math.degrees(lat_rad)
 
 
-def _detect_utm_params(prj_text: str):
+def _web_mercator_to_wgs84(x: float, y: float):
+    """Converts EPSG:3857 (Web Mercator) meters to WGS84 Lon/Lat."""
+    lon = (x / 20037508.342789244) * 180.0
+    lat = math.degrees(2.0 * math.atan(math.exp((y / 20037508.342789244) * math.pi)) - math.pi / 2.0)
+    return lon, lat
+
+
+def _detect_crs_info(prj_text: str):
+    """Detects CRS from .prj text: ('WGS84', None), ('WEBMERCATOR', None), or ('UTM', (zone, southern))."""
     if not prj_text:
         return None
     up = prj_text.upper()
-    if "UTM" not in up and "TRANSVERSE_MERCATOR" not in up:
-        return None
-    zone = 36
-    for z in range(1, 61):
-        if f"ZONE_{z}" in up or f"ZONE {z}" in up or f"{z}S" in up or f"{z}N" in up:
-            zone = z
-            break
-    southern = ("SOUTH" in up) or (f"{zone}S" in up) or ("FALSE_NORTHING,10000000" in up.replace(" ", "").replace(chr(34), ""))
-    return (zone, southern)
+    if any(k in up for k in ["3857", "900913", "PSEUDO_MERCATOR", "AUXILIARY_SPHERE", "POPULAR_VISUALISATION"]):
+        return ("WEBMERCATOR", None)
+    if "UTM" in up or "TRANSVERSE_MERCATOR" in up:
+        zone = 36
+        for z in range(1, 61):
+            if f"ZONE_{z}" in up or f"ZONE {z}" in up or f"{z}S" in up or f"{z}N" in up:
+                zone = z
+                break
+        southern = (
+            ("SOUTH" in up)
+            or (f"{zone}S" in up)
+            or ("FALSE_NORTHING,10000000" in up.replace(" ", "").replace(chr(34), ""))
+        )
+        return ("UTM", (zone, southern))
+    if "GEOGCS" in up and "PROJCS" not in up:
+        return ("WGS84", None)
+    return None
 
 
 def _read_dbf_records(dbf_path: str) -> list[dict]:
@@ -91,8 +107,8 @@ def _read_dbf_records(dbf_path: str) -> list[dict]:
         if len(header) < 32:
             return []
         num_records = struct.unpack("<I", header[4:8])[0]
-        header_len = struct.unpack("<H", header)[0]
-        record_len = struct.unpack("<H", header)[0]
+        header_len = struct.unpack("<H", header[8:10])[0]
+        record_len = struct.unpack("<H", header[10:12])[0]
 
         fields = []
         while f.tell() < header_len - 1:
@@ -123,7 +139,7 @@ def _read_dbf_records(dbf_path: str) -> list[dict]:
 
 
 def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
-    """Reads a zipped ESRI shapefile (.shp, .dbf, .prj) in pure Python, keeping all DBF attributes."""
+    """Reads a zipped ESRI shapefile (.shp, .dbf, .prj) in pure Python, supporting WGS84, UTM & Web Mercator."""
     with tempfile.TemporaryDirectory() as tmpdir:
         zip_path = os.path.join(tmpdir, "archive.zip")
         with open(zip_path, "wb") as f:
@@ -151,7 +167,7 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
         if os.path.exists(prj_path):
             with open(prj_path, "r", encoding="utf-8", errors="ignore") as pf:
                 prj_text = pf.read()
-        utm_params = _detect_utm_params(prj_text)
+        crs_info = _detect_crs_info(prj_text)
 
         records = _read_dbf_records(dbf_path)
         name_field = None
@@ -166,17 +182,25 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
                     break
 
         def to_lonlat(x, y):
-            if utm_params is not None or abs(x) > 180 or abs(y) > 90:
-                zone, southern = utm_params if utm_params else (36, True)
+            if abs(x) <= 180.0 and abs(y) <= 90.0:
+                return (x, y)
+            if crs_info is not None and crs_info[0] == "WEBMERCATOR":
+                return _web_mercator_to_wgs84(x, y)
+            if crs_info is not None and crs_info[0] == "UTM":
+                zone, southern = crs_info[1]
                 return _utm_to_wgs84(x, y, zone=zone, southern=southern)
-            return (x, y)
+            # Heuristic fallback when .prj is missing:
+            # In Kenya/East Africa, Web Mercator X is ~3.7M-4.3M and Y is ~-500k to +500k
+            if 3_200_000 <= abs(x) <= 5_000_000 and abs(y) <= 1_200_000:
+                return _web_mercator_to_wgs84(x, y)
+            return _utm_to_wgs84(x, y, zone=36, southern=True)
 
         features = []
         with open(shp_path, "rb") as sf:
             file_hdr = sf.read(100)
             if len(file_hdr) < 100:
                 return []
-            file_len_bytes = struct.unpack(">I", file_hdr)[0] * 2
+            file_len_bytes = struct.unpack(">I", file_hdr[24:28])[0] * 2
 
             rec_idx = 0
             while sf.tell() < file_len_bytes:
@@ -199,12 +223,12 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
                         feat_name = cand
 
                 if shape_type in (1, 11, 21) and len(content) >= 20:
-                    x, y = struct.unpack("<dd", content)
+                    x, y = struct.unpack("<dd", content[4:20])
                     lon, lat = to_lonlat(x, y)
                     features.append({"geom_type": "Point", "parts": [[(lon, lat)]], "name": feat_name, "attrs": attrs})
 
                 elif shape_type in (8, 18, 28) and len(content) >= 40:
-                    num_pts = struct.unpack("<I", content)[0]
+                    num_pts = struct.unpack("<I", content[36:40])[0]
                     pts = []
                     for i in range(num_pts):
                         off = 40 + i * 16
@@ -216,7 +240,7 @@ def load_shapefile_zip(uploaded_zip, fallback_name: str) -> list[dict]:
 
                 elif shape_type in (3, 13, 23, 5, 15, 25) and len(content) >= 44:
                     gtype = "Polyline" if shape_type in (3, 13, 23) else "Polygon"
-                    num_parts, num_pts = struct.unpack("<II", content)
+                    num_parts, num_pts = struct.unpack("<II", content[36:44])
                     parts_idx = list(struct.unpack(f"<{num_parts}I", content[44:44 + 4 * num_parts]))
                     pts_start = 44 + 4 * num_parts
                     all_pts = []
@@ -265,10 +289,6 @@ def get_feature_centroid(feat: dict):
 # 2. PARSE CAMPS & FACILITIES CSV + MARA ELEPHANT PROJECT (MEP) FENCES DATA
 # ==============================================================================
 def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True) -> pd.DataFrame:
-    """
-    Parses EarthRanger / Park Camps & Facilities CSV/Excel into a standardized DataFrame:
-    Columns: Name, Facility_Type, Lat, Lon, Reported_By, Report_Id
-    """
     work = df.copy()
     work.columns = [str(c).strip() for c in work.columns]
 
@@ -321,10 +341,6 @@ def parse_camps_facilities_dataframe(df: pd.DataFrame, deduplicate: bool = True)
 
 
 def classify_mep_fence_type(raw_type: str) -> tuple[str, str, str]:
-    """
-    Classifies Mara Elephant Project (MEP) fence codes into clean legend labels:
-      (Broad_Category, Detailed_Subtype_Label, Strand_Detail)
-    """
     s = str(raw_type or "").strip()
     low = s.lower()
 
@@ -390,10 +406,6 @@ def compute_polyline_length_km(parts: list[list[tuple[float, float]]]) -> float:
 
 
 def process_mep_fence_shapefile_features(raw_features: list[dict]) -> tuple[list[dict], pd.DataFrame]:
-    """
-    Enriches shapefile features from the Mara Elephant Project (MEP) fencing dataset
-    with standardized Electric vs Wire classification, active status, and segment length in km.
-    """
     enriched = []
     rows = []
     for feat in raw_features:
@@ -451,9 +463,6 @@ def process_mep_fence_shapefile_features(raw_features: list[dict]) -> tuple[list
 
 
 def parse_mep_fence_attribute_csv(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Parses the Mara Elephant Project (MEP) fence attribute table CSV (e.g., `fenced Mt.csv`).
-    """
     work = df.copy()
     work.columns = [str(c).strip() for c in work.columns]
     col_map = {c.lower(): c for c in work.columns}
@@ -497,10 +506,49 @@ def parse_mep_fence_attribute_csv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==============================================================================
-# 3. OPENTOPOMAP TILE STITCHER ([https://tile.opentopomap.org/](https://tile.opentopomap.org/){z}/{x}/{y}.png)
+# 3. RELIABLE MULTI-PROVIDER BASEMAP TILE STITCHER (ESRI TOPO / CARTO / OPENTOPO)
 # ==============================================================================
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_opentopomap_basemap(min_lon: float, min_lat: float, max_lon: float, max_lat: float, zoom: int = 11):
+BASEMAP_PROVIDERS = {
+    "Esri World Topographic (Recommended — Fast & Reliable)": [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+    ],
+    "OpenTopoMap (Contour & Terrain)": [
+        "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+    ],
+    "CartoDB Voyager (Clean Pastel Terrain)": [
+        "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    ],
+    "Esri World Imagery (Satellite)": [
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    ],
+}
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _fetch_single_tile_bytes(url: str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MaraConservationGIS/1.0)",
+        "Accept": "image/png,image/jpeg,image/*,*/*;q=0.8",
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return resp.read()
+
+
+def fetch_basemap_tiles(
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    zoom: int = 11,
+    provider_label: str = "Esri World Topographic (Recommended — Fast & Reliable)",
+):
     def deg2num(lat_deg, lon_deg, z):
         lat_rad = math.radians(max(min(lat_deg, 85.0511), -85.0511))
         n = 2.0 ** z
@@ -518,7 +566,7 @@ def fetch_opentopomap_basemap(min_lon: float, min_lat: float, max_lon: float, ma
     x_min, y_max = deg2num(min_lat, min_lon, zoom)
     x_max, y_min = deg2num(max_lat, max_lon, zoom)
 
-    while (x_max - x_min + 1) * (y_max - y_min + 1) > 64 and zoom > 7:
+    while (x_max - x_min + 1) * (y_max - y_min + 1) > 49 and zoom > 7:
         zoom -= 1
         x_min, y_max = deg2num(min_lat, min_lon, zoom)
         x_max, y_min = deg2num(max_lat, max_lon, zoom)
@@ -527,17 +575,22 @@ def fetch_opentopomap_basemap(min_lon: float, min_lat: float, max_lon: float, ma
     rows = max(y_max - y_min + 1, 1)
     canvas = Image.new("RGB", (cols * 256, rows * 256), (242, 239, 233))
 
-    headers = {"User-Agent": "MaraTriangleCampsFencesMap/1.0"}
+    url_templates = BASEMAP_PROVIDERS.get(
+        provider_label,
+        BASEMAP_PROVIDERS["Esri World Topographic (Recommended — Fast & Reliable)"]
+    )
+
     for x in range(x_min, x_max + 1):
         for y in range(y_min, y_max + 1):
-            url = f"[https://tile.opentopomap.org/](https://tile.opentopomap.org/){zoom}/{x}/{y}.png"
-            try:
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=6) as resp:
-                    tile_img = Image.open(io.BytesIO(resp.read())).convert("RGB")
+            for tmpl in url_templates:
+                url = tmpl.format(z=zoom, x=x, y=y)
+                try:
+                    raw_bytes = _fetch_single_tile_bytes(url)
+                    tile_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
                     canvas.paste(tile_img, ((x - x_min) * 256, (y - y_min) * 256))
-            except Exception:
-                pass
+                    break
+                except Exception:
+                    continue
 
     north_lat, west_lon = num2deg(x_min, y_min, zoom)
     south_lat, east_lon = num2deg(x_max + 1, y_max + 1, zoom)
@@ -687,10 +740,6 @@ def add_top_right_logo(ax, logo_bytes, logo_scale_pct: int = 55):
 
 
 def compute_adaptive_marker_size(num_points: int, user_scale_pct: int = 100) -> float:
-    """
-    Automatically scales point marker area (`s` in points^2) so symbols remain bold and
-    distinct on large-format paper while preventing crowding up to 1,000+ facilities.
-    """
     if num_points <= 40:
         base_s = 105.0
     elif num_points <= 120:
@@ -771,6 +820,7 @@ def render_camps_and_fences_map(
     group_all_facilities_as_one: bool = True,
     show_legend_counts: bool = False,
     paper_size_label: str = "Large Poster / A2 Landscape (23.4 × 16.5 in) — Best Visibility",
+    basemap_provider: str = "Esri World Topographic (Recommended — Fast & Reliable)",
     conservancies: list = None,
     rivers_features: list = None,
     rivers_label: str = "Rivers & Luggas",
@@ -789,11 +839,6 @@ def render_camps_and_fences_map(
     area_fill_alpha: float = 0.20,
     marker_scale_pct: int = 115,
 ) -> bytes:
-    """
-    Renders a large-format, full-bleed cartographic map of Tented Camps & Lodges overlaid
-    with fencing data (sourced from Mara Elephant Project), with unclipped legend
-    placement, clean legend names without numbers, and standout facility symbols.
-    """
     conservancies = conservancies or []
     rivers_features = rivers_features or []
     roads_features = roads_features or []
@@ -857,8 +902,10 @@ def render_camps_and_fences_map(
     size_mult = fig_w / 14.0
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=220)
 
-    # 1. OpenTopoMap Basemap
-    basemap_img, extent = fetch_opentopomap_basemap(min_lon, min_lat, max_lon, max_lat, zoom=zoom_level)
+    # 1. Basemap Layer
+    basemap_img, extent = fetch_basemap_tiles(
+        min_lon, min_lat, max_lon, max_lat, zoom=zoom_level, provider_label=basemap_provider
+    )
     ax.imshow(basemap_img, extent=extent, aspect="auto", zorder=1)
     ax.set_xlim(min_lon, max_lon)
     ax.set_ylim(min_lat, max_lat)
@@ -940,7 +987,7 @@ def render_camps_and_fences_map(
             mlines.Line2D([], [], color="#0066CC", linewidth=1.9, label=rivers_label)
         )
 
-    # 5. Fencing Layer
+    # 5. Fencing Layer (MEP Fences)
     if fence_features:
         use_detailed = fence_breakdown_mode.startswith("Detailed")
         key_field = "fence_detail" if use_detailed else "fence_broad"
@@ -1298,16 +1345,22 @@ with col2:
     )
 
 with st.sidebar:
-    st.subheader("Paper Size & Map Visibility")
+    st.subheader("Paper Size & Basemap Layer")
     paper_size_label = st.selectbox(
         "Map Sheet / Paper Size",
         options=list(PAPER_SIZES_INCHES.keys()),
         index=0,
         key="camps_paper_size_sel"
     )
+    basemap_provider = st.selectbox(
+        "Background Map Layer",
+        options=list(BASEMAP_PROVIDERS.keys()),
+        index=0,
+        key="camps_basemap_provider_sel"
+    )
     map_title = st.text_input("Map Title", value="TENTED CAMPS, LODGES & FENCING DISTRIBUTION", key="camps_map_title_txt")
     report_period = st.text_input("Report Period Label", value="November 2026", key="camps_map_period_txt")
-    zoom_level = st.slider("OpenTopoMap Tile Detail (Zoom)", min_value=9, max_value=13, value=12, key="camps_topo_zoom")
+    zoom_level = st.slider("Map Tile Detail (Zoom)", min_value=9, max_value=13, value=11, key="camps_topo_zoom")
     logo_scale_pct = st.slider("Top-Right Logo Size (%)", min_value=25, max_value=100, value=60, step=5, key="camps_logo_size_pct")
     marker_scale_pct = st.slider(
         "Tented Camps & Lodges Symbol Size (%)",
@@ -1420,6 +1473,12 @@ if fences_shp_zips:
             if filtered_f:
                 fence_features = filtered_f
                 fence_shp_summary_df = fence_shp_summary_df[fence_shp_summary_df["Status"] == "Active (1)"].reset_index(drop=True)
+        fb_check = get_features_bounds(fence_features)
+        if fb_check:
+            st.success(
+                f"✅ Loaded **{len(fence_features):,}** fence segments from shapefile "
+                f"(Lon: `{fb_check[0]:.3f}°` to `{fb_check[2]:.3f}°`, Lat: `{fb_check[1]:.3f}°` to `{fb_check[3]:.3f}°`)."
+            )
 
 fence_csv_summary_df = pd.DataFrame()
 if fences_attr_csv is not None:
@@ -1432,6 +1491,11 @@ if fences_attr_csv is not None:
         act_sub = fence_csv_summary_df[fence_csv_summary_df["Status"] == "Active (1)"]
         if len(act_sub) > 0:
             fence_csv_summary_df = act_sub.reset_index(drop=True)
+    if not fence_features:
+        st.warning(
+            "⚠️ You uploaded the Fences attribute CSV (`fenced Mt.csv`), which contains fence types/lengths "
+            "without line coordinates. To draw the fence lines on the map, also upload the Fences shapefile **`.zip`** in box **2️⃣**."
+        )
 
 # ------------------------------------------------------------------------------
 # Display Summary Tables & KPIs
@@ -1547,6 +1611,7 @@ if len(camps_df) > 0 or len(fence_features) > 0 or len(fence_csv_summary_df) > 0
                     group_all_facilities_as_one=group_all_facilities_as_one,
                     show_legend_counts=show_legend_counts,
                     paper_size_label=paper_size_label,
+                    basemap_provider=basemap_provider,
                     conservancies=conservancies_loaded,
                     rivers_features=rivers_features,
                     rivers_label=rivers_legend_name,
